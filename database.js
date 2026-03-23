@@ -1,71 +1,111 @@
-const sqlite3 = require("sqlite3").verbose();
-const path = require("path");
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
 
-const DB_PATH = path.join(__dirname, "conference.db");
+// Load environment variables from .env file
+dotenv.config();
 
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error("❌ Failed to open database:", err.message);
+// Use the DATABASE_URL provided by Render
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Required for Render's PostgreSQL
+  },
+});
+
+// A simple function to initialize the database schema
+export async function initializeDb() {
+  console.log("🔵 Initializing database schema...");
+  try {
+    // Create the participants table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS participants (
+        id TEXT PRIMARY KEY,
+        fullName TEXT,
+        email TEXT NOT NULL,
+        phone TEXT,
+        country TEXT,
+        organization TEXT,
+        registrationType TEXT,
+        excursion BOOLEAN DEFAULT FALSE,
+        galaDinner BOOLEAN DEFAULT FALSE,
+        amount NUMERIC(10, 2),
+        paymentStatus TEXT DEFAULT 'pending',
+        paymentReference TEXT,
+        createdAt TIMESTAMPTZ DEFAULT NOW(),
+        checkedIn BOOLEAN DEFAULT FALSE,
+        checkedInAt TIMESTAMPTZ,
+        checkedInBy TEXT
+      )
+    `);
+    console.log("✅ 'participants' table is ready.");
+
+    // Add new columns if they don't exist (for migrations)
+    const client = await pool.connect();
+    try {
+      // Check for 'checkedIn' column
+      const checkInResult = await client.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'participants' AND column_name = 'checkedIn'
+      `);
+      if (checkInResult.rows.length === 0) {
+        await client.query(`ALTER TABLE participants ADD COLUMN checkedIn BOOLEAN DEFAULT FALSE`);
+        console.log("✅ Added 'checkedIn' column.");
+      }
+
+      // Check for 'checkedInAt' column
+      const checkInAtResult = await client.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'participants' AND column_name = 'checkedInAt'
+      `);
+      if (checkInAtResult.rows.length === 0) {
+        await client.query(`ALTER TABLE participants ADD COLUMN checkedInAt TIMESTAMPTZ`);
+        console.log("✅ Added 'checkedInAt' column.");
+      }
+      
+      // Check for 'checkedInBy' column
+      const checkInByResult = await client.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'participants' AND column_name = 'checkedInBy'
+      `);
+      if (checkInByResult.rows.length === 0) {
+        await client.query(`ALTER TABLE participants ADD COLUMN checkedInBy TEXT`);
+        console.log("✅ Added 'checkedInBy' column.");
+      }
+
+    } finally {
+      client.release(); // Release the client back to the pool
+    }
+
+    console.log("🟢 Database initialization complete.");
+  } catch (err) {
+    console.error("❌ Database initialization failed:", err);
+    // Exit if we can't set up the database, as the app can't function.
     process.exit(1);
   }
-  console.log("✅ Database connected:", DB_PATH);
-});
+}
 
-// Wait up to 15 seconds when locked before failing
-db.configure("busyTimeout", 15000);
+// Wrapper functions to mimic the 'sqlite3' API
+// This makes the migration to server.js much easier!
 
-// Run these as sequential serialized operations so they
-// never compete with each other at startup
-db.serialize(() => {
+// For a single row (like db.get)
+export async function dbGet(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null; // Return null if no row found
+}
 
-  // WAL mode — allows concurrent reads + writes without locking
-  db.run("PRAGMA journal_mode = WAL;", (err) => {
-    if (err) console.warn("WAL pragma warning:", err.message);
-  });
+// For all rows (like db.all)
+export async function dbAll(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows;
+}
 
-  db.run("PRAGMA synchronous = NORMAL;", (err) => {
-    if (err) console.warn("Synchronous pragma warning:", err.message);
-  });
+// For insert, update, delete (like db.run)
+export async function dbRun(sql, params = []) {
+  await pool.query(sql, params);
+}
 
-  // Create table if it doesn't exist yet
-  db.run(`
-    CREATE TABLE IF NOT EXISTS participants (
-      id TEXT PRIMARY KEY,
-      fullName TEXT,
-      email TEXT,
-      phone TEXT,
-      country TEXT,
-      organization TEXT,
-      registrationType TEXT,
-      excursion INTEGER DEFAULT 0,
-      galaDinner INTEGER DEFAULT 0,
-      amount REAL,
-      paymentStatus TEXT DEFAULT 'pending',
-      paymentReference TEXT,
-      createdAt TEXT,
-      checkedIn INTEGER DEFAULT 0,
-      checkedInAt TEXT,
-      checkedInBy TEXT
-    )
-  `, (err) => {
-    if (err) console.error("❌ Create table error:", err.message);
-  });
-
-  // Add check-in columns to existing databases that predate this schema.
-  // Each runs independently — errors are silently ignored because
-  // "duplicate column" is expected on databases that already have them.
-  const addColumn = (sql) => {
-    db.run(sql, (err) => {
-      if (err && !err.message.includes("duplicate column")) {
-        console.warn("Migration warning:", err.message);
-      }
-    });
-  };
-
-  addColumn("ALTER TABLE participants ADD COLUMN checkedIn INTEGER DEFAULT 0");
-  addColumn("ALTER TABLE participants ADD COLUMN checkedInAt TEXT");
-  addColumn("ALTER TABLE participants ADD COLUMN checkedInBy TEXT");
-
-});
-
-module.exports = db;
+// Optional: A function to close the pool gracefully
+export async function closeDb() {
+  await pool.end();
+  console.log("Database pool closed.");
+}
