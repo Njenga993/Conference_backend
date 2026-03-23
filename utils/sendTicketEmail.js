@@ -183,4 +183,4 @@ async function sendTicketEmail(participant, ticketPath) {
   return info;
 }
 
-module.exports = sendTicketEmail;
+export default sendTicketEmail;

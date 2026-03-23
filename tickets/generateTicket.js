@@ -190,4 +190,4 @@ async function generateTicket(participant) {
   return filePath;
 }
 
-module.exports = generateTicket;
+export default generateTicket;
