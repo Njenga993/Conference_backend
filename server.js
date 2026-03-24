@@ -172,6 +172,9 @@ async function startServer() {
     ========================================
     PAYMENT PROCESSING HELPER
     ========================================
+    IMPORTANT: Email is sent asynchronously to prevent timeouts
+    from blocking payment verification success
+    ========================================
     */
     async function processSuccessfulPayment(participantId, reference) {
       console.log(`Processing payment for participant: ${participantId}`);
@@ -192,9 +195,15 @@ async function startServer() {
       const ticketPath = await generateTicket(participant);
       console.log("🎫 Ticket generated:", ticketPath);
       
-      // Send email
-      await sendTicketEmail(participant, ticketPath);
-      console.log("📧 Email sent to:", participant.email);
+      // Send email asynchronously (don't await, don't block payment verification)
+      // This prevents SMTP timeouts from causing 500 errors on the payment endpoint
+      sendTicketEmail(participant, ticketPath)
+        .then(() => console.log("📧 Email sent successfully to:", participant.email))
+        .catch((err) => {
+          console.error("⚠️ Email send failed (async, non-blocking):", err.message);
+          console.error("   Participant:", participant.email, "| ID:", participantId);
+          // Email failed, but payment is already confirmed - not critical
+        });
       
       return participant;
     }
@@ -327,7 +336,7 @@ async function startServer() {
             return res.json({ status: "success", participantId, alreadyProcessed: true });
           }
           
-          // Process the payment
+          // Process the payment (email is sent async, won't block this response)
           await processSuccessfulPayment(participantId, reference);
           res.json({ status: "success", participantId });
         } else {
@@ -520,7 +529,12 @@ async function startServer() {
         const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentStatus = 'paid'`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Participant not found or payment not confirmed" });
         const ticketPath = await generateTicket(participant);
-        await sendTicketEmail(participant, ticketPath);
+        
+        // Send email asynchronously
+        sendTicketEmail(participant, ticketPath)
+          .then(() => console.log("📧 Resent ticket email to:", participant.email))
+          .catch((err) => console.error("⚠️ Failed to resend email:", err.message));
+        
         res.json({ success: true, message: "Ticket resent to " + participant.email });
       } catch (error) { res.status(500).json({ error: "Failed to resend: " + error.message }); }
     });
