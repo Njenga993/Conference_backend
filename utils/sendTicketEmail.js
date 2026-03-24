@@ -9,19 +9,27 @@ import path from "path";
  */
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT, 10) || 465,
-  secure: true, // `true` for port 465, `false` for all other ports
+  port: parseInt(process.env.EMAIL_PORT, 10) || 587, // Changed from 465 to 587
+  secure: parseInt(process.env.EMAIL_PORT, 10) === 465, // true for 465, false for 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  tls: {
+    rejectUnauthorized: false, // Allow self-signed certificates (can be enabled later)
+  },
+  connectionTimeout: 10000, // 10 seconds
+  socketTimeout: 10000, // 10 seconds
 });
 
 // Verify SMTP connection on startup for immediate feedback on credentials.
 transporter.verify((error) => {
   if (error) {
     console.error("❌ SMTP connection failed:", error.message);
-    console.error("   Check EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS in your environment variables.");
+    console.error("   Checking EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS...");
+    console.error("   EMAIL_HOST:", process.env.EMAIL_HOST);
+    console.error("   EMAIL_PORT:", process.env.EMAIL_PORT);
+    console.error("   EMAIL_USER:", process.env.EMAIL_USER);
   } else {
     console.log("✅ SMTP server is ready to send emails from:", process.env.EMAIL_HOST);
   }
@@ -169,7 +177,7 @@ async function sendTicketEmail(participant, ticketPath) {
     console.log(`✅ Email sent successfully to ${participant.email}. Message ID: ${info.messageId}`);
     return info;
   } catch (error) {
-    console.error(`❌ Failed to send email to ${participant.email}:`, error);
+    console.error(`❌ Failed to send email to ${participant.email}:`, error.message);
     throw new Error(`Email sending failed: ${error.message}`);
   }
 }

@@ -37,6 +37,14 @@ async function generateTicket(participant) {
 
   const filePath = path.join(ticketsDir, `${participant.id}.pdf`);
 
+  // === NORMALIZE POSTGRESQL LOWERCASE COLUMNS TO CAMELCASE ===
+  // PostgreSQL returns columns as lowercase, but we expect camelCase
+  const fullName = participant.fullName || participant.fullname || "Participant";
+  const registrationType = participant.registrationType || participant.registrationtype || "delegate";
+  const organization = participant.organization || participant.organization || "";
+  const country = participant.country || participant.country || "";
+  // ===========================================================
+
   // Create a new PDF document
   const doc = new PDFDocument({
     size: [PAGE_W, PAGE_H],
@@ -48,7 +56,7 @@ async function generateTicket(participant) {
   doc.pipe(fs.createWriteStream(filePath));
 
   // --- DYNAMIC STYLING ---
-  const regType = (participant.registrationType || "delegate").toLowerCase();
+  const regType = (registrationType || "delegate").toLowerCase();
   let accent = "#C99A2E"; // Default color
   if (regType === "delegate") accent = "#3182CE";
   if (regType === "farmer") accent = "#38A169";
@@ -94,11 +102,12 @@ async function generateTicket(participant) {
   doc.rect(midX + 18, 13, MID_W - 36, 16).fill(accent);
   doc.fillColor("#FFFFFF").fontSize(7.5).font("Helvetica-Bold").text(regType.toUpperCase(), midX + 18, 17, { width: MID_W - 36, align: "center" });
   
-  const nameStr = participant.fullName || "Participant";
+  // Display participant name with adaptive font size
+  const nameStr = fullName;
   const nameFontSize = nameStr.length > 22 ? 11 : nameStr.length > 16 ? 13 : 15;
   doc.fillColor("#FFFFFF").fontSize(nameFontSize).font("Helvetica-Bold").text(nameStr, midX + 8, 36, { width: MID_W - 16, align: "center" });
-  doc.fillColor(accent).fontSize(7.5).font("Helvetica-Bold").text((participant.organization || "").toUpperCase(), midX + 8, 62, { width: MID_W - 16, align: "center" });
-  doc.fillColor("#AAAAAA").fontSize(7).font("Helvetica").text(participant.country || "", midX + 8, 73, { width: MID_W - 16, align: "center" });
+  doc.fillColor(accent).fontSize(7.5).font("Helvetica-Bold").text((organization || "").toUpperCase(), midX + 8, 62, { width: MID_W - 16, align: "center" });
+  doc.fillColor("#AAAAAA").fontSize(7).font("Helvetica").text(country || "", midX + 8, 73, { width: MID_W - 16, align: "center" });
   doc.moveTo(midX + 18, 84).lineTo(midX + MID_W - 18, 84).strokeColor("#2A2A4E").lineWidth(0.4).stroke();
 
   // --- QR CODE ---
