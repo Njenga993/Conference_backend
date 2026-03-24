@@ -34,6 +34,10 @@ async function startServer() {
     console.log("Database is ready. Starting server...");
 
     const app = express();
+    
+    // CRITICAL: Trust proxy for Render deployment (required for rate limiting with X-Forwarded-For)
+    app.set('trust proxy', 1);
+    
     const PORT = process.env.PORT || 5000;
     const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
     const WEBHOOK_SECRET = process.env.PAYSTACK_WEBHOOK_SECRET;
@@ -87,27 +91,39 @@ async function startServer() {
     ========================================
     */
     const paymentInitLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, max: 10,
+      windowMs: 15 * 60 * 1000, 
+      max: 10,
       message: { error: "Too many payment requests. Please wait and try again." },
-      standardHeaders: true, legacyHeaders: false,
+      standardHeaders: true, 
+      legacyHeaders: false,
+      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const verifyLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, max: 20,
+      windowMs: 15 * 60 * 1000, 
+      max: 20,
       message: { error: "Too many verification requests. Please wait and try again." },
-      standardHeaders: true, legacyHeaders: false,
+      standardHeaders: true, 
+      legacyHeaders: false,
+      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const adminLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, max: 120,
+      windowMs: 15 * 60 * 1000, 
+      max: 120,
       message: { error: "Too many requests." },
-      standardHeaders: true, legacyHeaders: false,
+      standardHeaders: true, 
+      legacyHeaders: false,
+      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const loginLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, max: 10,
+      windowMs: 15 * 60 * 1000, 
+      max: 10,
       message: { error: "Too many login attempts. Please wait 15 minutes." },
-      standardHeaders: true, legacyHeaders: false,
+      standardHeaders: true, 
+      legacyHeaders: false,
+      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     /*
@@ -158,16 +174,28 @@ async function startServer() {
     ========================================
     */
     async function processSuccessfulPayment(participantId, reference) {
+      console.log(`Processing payment for participant: ${participantId}`);
+      
+      // First verify the participant exists
+      const participant = await dbGet(`SELECT * FROM participants WHERE id = $1`, [participantId]);
+      if (!participant) {
+        throw new Error(`Participant not found in database: ${participantId}`);
+      }
+      
+      // Update payment status
       await dbRun(
         `UPDATE participants SET paymentStatus = $1, paymentReference = $2 WHERE id = $3`,
         ["paid", reference, participantId]
       );
-      const participant = await dbGet(`SELECT * FROM participants WHERE id = $1`, [participantId]);
-      if (!participant) throw new Error(`Participant not found: ${participantId}`);
+      
+      // Generate ticket
       const ticketPath = await generateTicket(participant);
       console.log("🎫 Ticket generated:", ticketPath);
+      
+      // Send email
       await sendTicketEmail(participant, ticketPath);
       console.log("📧 Email sent to:", participant.email);
+      
       return participant;
     }
 
@@ -234,12 +262,21 @@ async function startServer() {
             amount, "pending", new Date().toISOString(),
           ]
         );
+        
+        console.log(`✅ Participant created in DB: ${participantId}`);
 
         const response = await axios.post(
           "https://api.paystack.co/transaction/initialize",
-          { email, amount: amount * 100, metadata: { participantId }, callback_url: `${FRONTEND_URL}/payment-success` },
+          { 
+            email, 
+            amount: amount * 100, 
+            metadata: { participantId }, 
+            callback_url: `${FRONTEND_URL}/payment-success` 
+          },
           { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" } }
         );
+        
+        console.log(`✅ Paystack initialized for ${participantId}:`, response.data.data.reference);
         res.json(response.data.data);
       } catch (error) {
         await dbRun(`UPDATE participants SET paymentStatus = $1 WHERE id = $2`, ["failed", participantId]).catch(() => {});
@@ -256,16 +293,45 @@ async function startServer() {
     app.post("/verify-payment", verifyLimiter, async (req, res) => {
       const { reference } = req.body;
       if (!reference) return res.status(400).json({ error: "reference is required" });
+      
+      console.log(`🔍 Verifying payment with reference: ${reference}`);
+      
       try {
-        const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } });
+        const response = await axios.get(
+          `https://api.paystack.co/transaction/verify/${reference}`, 
+          { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
+        );
+        
         const data = response.data;
+        console.log(`Paystack response status: ${data.status}, transaction status: ${data.data?.status}`);
+        
         if (data.status && data.data.status === "success") {
-          const participantId = data.data.metadata.participantId;
+          const participantId = data.data.metadata?.participantId;
+          
+          if (!participantId) {
+            console.error("❌ Paystack response missing participantId in metadata:", data.data.metadata);
+            return res.status(500).json({ error: "Payment verification failed: Missing participant information" });
+          }
+          
+          console.log(`✅ Payment verified for participant: ${participantId}`);
+          
+          // Check if already processed
           const existing = await dbGet(`SELECT paymentStatus FROM participants WHERE id = $1`, [participantId]);
-          if (existing?.paymentStatus === "paid") return res.json({ status: "success", participantId, alreadyProcessed: true });
+          if (!existing) {
+            console.error(`❌ Participant not found in database: ${participantId}`);
+            return res.status(404).json({ error: "Participant not found. Please contact support." });
+          }
+          
+          if (existing.paymentStatus === "paid") {
+            console.log(`⚠️ Payment already processed for ${participantId}`);
+            return res.json({ status: "success", participantId, alreadyProcessed: true });
+          }
+          
+          // Process the payment
           await processSuccessfulPayment(participantId, reference);
           res.json({ status: "success", participantId });
         } else {
+          console.log(`Payment verification failed for reference: ${reference}`);
           res.json({ status: "failed" });
         }
       } catch (error) {
@@ -281,19 +347,47 @@ async function startServer() {
     */
     app.post("/paystack-webhook", async (req, res) => {
       const hash = crypto.createHmac("sha512", WEBHOOK_SECRET).update(req.body).digest("hex");
-      if (hash !== req.headers["x-paystack-signature"]) { console.warn("⚠️ Invalid webhook signature"); return res.sendStatus(401); }
+      if (hash !== req.headers["x-paystack-signature"]) { 
+        console.warn("⚠️ Invalid webhook signature"); 
+        return res.sendStatus(401); 
+      }
       res.sendStatus(200);
+      
       let event;
-      try { event = JSON.parse(req.body); } catch { console.error("❌ Failed to parse webhook"); return; }
+      try { 
+        event = JSON.parse(req.body); 
+      } catch { 
+        console.error("❌ Failed to parse webhook"); 
+        return; 
+      }
+      
       if (event.event !== "charge.success") return;
+      
       const reference = event.data.reference;
       const participantId = event.data.metadata?.participantId;
-      if (!participantId) { console.error("❌ Webhook missing participantId"); return; }
+      
+      if (!participantId) { 
+        console.error("❌ Webhook missing participantId"); 
+        return; 
+      }
+      
       try {
         const existing = await dbGet(`SELECT paymentStatus FROM participants WHERE id = $1`, [participantId]);
-        if (existing?.paymentStatus === "paid") { console.log("⚠️ Already processed:", participantId); return; }
+        if (!existing) {
+          console.error(`❌ Webhook: Participant not found: ${participantId}`);
+          return;
+        }
+        
+        if (existing.paymentStatus === "paid") { 
+          console.log("⚠️ Already processed:", participantId); 
+          return; 
+        }
+        
         await processSuccessfulPayment(participantId, reference);
-      } catch (error) { console.error("❌ Webhook error:", error.message); }
+        console.log(`✅ Webhook processed payment for: ${participantId}`);
+      } catch (error) { 
+        console.error("❌ Webhook error:", error.message); 
+      }
     });
 
     /*
