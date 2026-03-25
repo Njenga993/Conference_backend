@@ -1,37 +1,38 @@
 // utils/sendTicketEmail.js
+// Configured for Truehost SMTP relay (port 25, no TLS)
 
 import nodemailer from "nodemailer";
 import * as fs from "fs";
 import path from "path";
 
 /**
- * Creates and verifies a Nodemailer transporter using environment variables.
+ * Creates and verifies a Nodemailer transporter using Truehost SMTP relay.
+ * Truehost provides mail.truehost.co.ke as a relay host for outbound emails.
  */
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT, 10) || 25, // Changed from 465 to 587
-  secure: false, // true for 465, false for 587
+  host: process.env.EMAIL_HOST || "mail.truehost.co.ke", // Truehost relay host
+  port: parseInt(process.env.EMAIL_PORT, 10) || 25, // Port 25 for relay (no TLS)
+  secure: false, // Port 25 doesn't use TLS/SSL
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  //tls: {
-   // rejectUnauthorized: false, // Allow self-signed certificates (can be enabled later)
-  //},
-  connectionTimeout: 10000, // 10 seconds
-  socketTimeout: 10000, // 10 seconds
+  connectionTimeout: 15000, // 15 seconds (relay can be slower)
+  socketTimeout: 15000, // 15 seconds
 });
 
 // Verify SMTP connection on startup for immediate feedback on credentials.
 transporter.verify((error) => {
   if (error) {
     console.error("❌ SMTP connection failed:", error.message);
-    console.error("   Checking EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS...");
-    console.error("   EMAIL_HOST:", process.env.EMAIL_HOST);
-    console.error("   EMAIL_PORT:", process.env.EMAIL_PORT);
+    console.error("   Checking EMAIL configuration for Truehost relay...");
+    console.error("   EMAIL_HOST:", process.env.EMAIL_HOST || "mail.truehost.co.ke");
+    console.error("   EMAIL_PORT:", process.env.EMAIL_PORT || "25");
     console.error("   EMAIL_USER:", process.env.EMAIL_USER);
+    console.error("   Tip: If using Truehost, make sure SMTP relay is enabled in your cPanel");
   } else {
-    console.log("✅ SMTP server is ready to send emails from:", process.env.EMAIL_HOST);
+    console.log("✅ SMTP server (Truehost relay) is ready to send emails");
+    console.log("   Host:", process.env.EMAIL_HOST || "mail.truehost.co.ke");
   }
 });
 
