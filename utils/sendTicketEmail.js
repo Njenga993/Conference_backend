@@ -9,7 +9,7 @@ import path from "path";
  */
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT, 10) || 587, // Changed from 465 to 587
+  port: parseInt(process.env.EMAIL_PORT, 10) || 456, // Changed from 465 to 587
   secure: parseInt(process.env.EMAIL_PORT, 10) === 465, // true for 465, false for 587
   auth: {
     user: process.env.EMAIL_USER,
