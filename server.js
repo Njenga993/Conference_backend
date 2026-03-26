@@ -241,58 +241,104 @@ async function startServer() {
       res.json({ valid: true, role: req.user.role });
     });
 
-    /*
-    ========================================
-    INITIALIZE PAYMENT
-    ========================================
-    */
-    app.post("/initialize-payment", paymentInitLimiter, async (req, res) => {
-      const { email, amount, name, metadata } = req.body;
-      if (!email || !amount || !name) return res.status(400).json({ error: "email, amount, and name are required" });
-      if (typeof amount !== "number" || amount <= 0) return res.status(400).json({ error: "amount must be a positive number" });
+// ========================================
+// UPDATED: INITIALIZE PAYMENT ENDPOINT
+// ========================================
+// This endpoint now collects ALL fields from the registration form
 
-      const registrationType = metadata?.registrationType || "";
-      const existing = await dbGet(
-        `SELECT id FROM participants WHERE email = $1 AND registrationType = $2 AND paymentStatus = 'paid'`,
-        [email.toLowerCase().trim(), registrationType]
-      ).catch(() => null);
+app.post("/initialize-payment", paymentInitLimiter, async (req, res) => {
+  const { email, amount, name, metadata } = req.body;
+  
+  if (!email || !amount || !name) {
+    return res.status(400).json({ error: "email, amount, and name are required" });
+  }
+  
+  if (typeof amount !== "number" || amount <= 0) {
+    return res.status(400).json({ error: "amount must be a positive number" });
+  }
 
-      if (existing) return res.status(409).json({ error: "A paid registration already exists for this email and registration type.", code: "DUPLICATE_REGISTRATION" });
+  const registrationType = metadata?.registrationType || "";
+  
+  // Check for duplicate registration (same email + same registration type)
+  const existing = await dbGet(
+    `SELECT id FROM participants WHERE email = $1 AND registrationType = $2 AND paymentStatus = 'paid'`,
+    [email.toLowerCase().trim(), registrationType]
+  ).catch(() => null);
 
-      const participantId = uuidv4();
-      try {
-        await dbRun(
-          `INSERT INTO participants (id, fullName, email, phone, country, organization, registrationType, excursion, galaDinner, amount, paymentStatus, createdAt) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [
-            participantId, name, email.toLowerCase().trim(),
-            metadata?.phone || "", metadata?.country || "",
-            metadata?.organization || "", registrationType,
-            metadata?.excursion ? true : false, metadata?.galaDinner ? true : false,
-            amount, "pending", new Date().toISOString(),
-          ]
-        );
-        
-        console.log(`✅ Participant created in DB: ${participantId}`);
-
-        const response = await axios.post(
-          "https://api.paystack.co/transaction/initialize",
-          { 
-            email, 
-            amount: amount * 100, 
-            metadata: { participantId }, 
-            callback_url: `${FRONTEND_URL}/payment-success` 
-          },
-          { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" } }
-        );
-        
-        console.log(`✅ Paystack initialized for ${participantId}:`, response.data.data.reference);
-        res.json(response.data.data);
-      } catch (error) {
-        await dbRun(`UPDATE participants SET paymentStatus = $1 WHERE id = $2`, ["failed", participantId]).catch(() => {});
-        console.error("Payment init error:", error.response?.data || error.message);
-        res.status(500).json({ error: "Payment initialization failed" });
-      }
+  if (existing) {
+    return res.status(409).json({ 
+      error: "A paid registration already exists for this email and registration type.", 
+      code: "DUPLICATE_REGISTRATION" 
     });
+  }
+
+  const participantId = uuidv4();
+  
+  try {
+    // ✅ INSERT ALL FIELDS FROM REGISTRATION FORM
+    await dbRun(
+      `INSERT INTO participants (
+        id, fullName, email, phone, dialCode, country, organization, position, 
+        category, registrationType, excursion, galaDinner, amount, paymentStatus, 
+        createdAt, hearAbout, dietaryRestrictions, accommodation, specialNeeds
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+      )`,
+      [
+        participantId,                              // id
+        name,                                       // fullName
+        email.toLowerCase().trim(),                 // email
+        metadata?.phone || "",                      // phone (combined dial + number)
+        metadata?.dialCode || "",                   // dialCode (just the country code)
+        metadata?.country || "",                    // country
+        metadata?.organization || "",               // organization
+        metadata?.position || "",                   // position
+        metadata?.category || "",                   // category
+        registrationType,                           // registrationType
+        metadata?.excursion ? true : false,         // excursion
+        metadata?.galaDinner ? true : false,        // galaDinner
+        amount,                                     // amount
+        "pending",                                  // paymentStatus
+        new Date().toISOString(),                   // createdAt
+        metadata?.hearAbout || "",                  // hearAbout
+        metadata?.dietaryRestrictions || "",        // dietaryRestrictions
+        metadata?.accommodation || "",              // accommodation
+        metadata?.specialNeeds || ""                // specialNeeds
+      ]
+    );
+    
+    console.log(`✅ Participant created in DB: ${participantId}`);
+    console.log(`   Name: ${name}`);
+    console.log(`   Email: ${email}`);
+    console.log(`   Type: ${registrationType}`);
+    console.log(`   Country: ${metadata?.country}`);
+
+    // Initialize Paystack payment
+    const response = await axios.post(
+      "https://api.paystack.co/transaction/initialize",
+      { 
+        email, 
+        amount: amount * 100,  // Paystack expects amount in cents
+        metadata: { participantId },  // Attach participant ID for verification later
+        callback_url: `${FRONTEND_URL}/payment-success` 
+      },
+      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" } }
+    );
+    
+    console.log(`✅ Paystack initialized for ${participantId}:`, response.data.data.reference);
+    res.json(response.data.data);
+    
+  } catch (error) {
+    // Mark as failed if Paystack fails
+    await dbRun(
+      `UPDATE participants SET paymentStatus = $1 WHERE id = $2`, 
+      ["failed", participantId]
+    ).catch(() => {});
+    
+    console.error("Payment init error:", error.response?.data || error.message);
+    res.status(500).json({ error: "Payment initialization failed" });
+  }
+});
 
     /*
     ========================================
