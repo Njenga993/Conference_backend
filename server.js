@@ -11,7 +11,7 @@ import dotenv from "dotenv";
 import { v4 as uuidv4 } from "uuid";
 import { Parser } from "json2csv";
 
-// Import the new database helper functions
+// Import the database helper functions
 import { dbGet, dbAll, dbRun, initializeDb } from "./database.js";
 
 // Import local modules
@@ -35,7 +35,7 @@ async function startServer() {
 
     const app = express();
     
-    // CRITICAL: Trust proxy for Render deployment (required for rate limiting with X-Forwarded-For)
+    // Trust proxy for Render deployment
     app.set('trust proxy', 1);
     
     const PORT = process.env.PORT || 5000;
@@ -53,6 +53,7 @@ async function startServer() {
     ========================================
     */
     const REQUIRED_ENV = [
+      "DATABASE_URL",
       "PAYSTACK_SECRET_KEY",
       "FRONTEND_URL",
       "PAYSTACK_WEBHOOK_SECRET",
@@ -96,7 +97,6 @@ async function startServer() {
       message: { error: "Too many payment requests. Please wait and try again." },
       standardHeaders: true, 
       legacyHeaders: false,
-      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const verifyLimiter = rateLimit({
@@ -105,7 +105,6 @@ async function startServer() {
       message: { error: "Too many verification requests. Please wait and try again." },
       standardHeaders: true, 
       legacyHeaders: false,
-      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const adminLimiter = rateLimit({
@@ -114,7 +113,6 @@ async function startServer() {
       message: { error: "Too many requests." },
       standardHeaders: true, 
       legacyHeaders: false,
-      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     const loginLimiter = rateLimit({
@@ -123,7 +121,6 @@ async function startServer() {
       message: { error: "Too many login attempts. Please wait 15 minutes." },
       standardHeaders: true, 
       legacyHeaders: false,
-      skip: (req) => process.env.NODE_ENV === 'development',
     });
 
     /*
@@ -172,37 +169,31 @@ async function startServer() {
     ========================================
     PAYMENT PROCESSING HELPER
     ========================================
-    IMPORTANT: Email is sent asynchronously to prevent timeouts
-    from blocking payment verification success
+    Email is sent asynchronously to prevent timeouts
     ========================================
     */
     async function processSuccessfulPayment(participantId, reference) {
       console.log(`Processing payment for participant: ${participantId}`);
       
-      // First verify the participant exists
       const participant = await dbGet(`SELECT * FROM participants WHERE id = $1`, [participantId]);
       if (!participant) {
         throw new Error(`Participant not found in database: ${participantId}`);
       }
       
-      // Update payment status
       await dbRun(
         `UPDATE participants SET paymentStatus = $1, paymentReference = $2 WHERE id = $3`,
         ["paid", reference, participantId]
       );
       
-      // Generate ticket
       const ticketPath = await generateTicket(participant);
       console.log("🎫 Ticket generated:", ticketPath);
       
-      // Send email asynchronously (don't await, don't block payment verification)
-      // This prevents SMTP timeouts from causing 500 errors on the payment endpoint
+      // Send email asynchronously (don't block payment confirmation)
       sendTicketEmail(participant, ticketPath)
         .then(() => console.log("📧 Email sent successfully to:", participant.email))
         .catch((err) => {
           console.error("⚠️ Email send failed (async, non-blocking):", err.message);
           console.error("   Participant:", participant.email, "| ID:", participantId);
-          // Email failed, but payment is already confirmed - not critical
         });
       
       return participant;
@@ -261,25 +252,49 @@ async function startServer() {
 
       const participantId = uuidv4();
       try {
+        // ✅ INSERT ALL FIELDS FROM REGISTRATION FORM
         await dbRun(
-          `INSERT INTO participants (id, fullName, email, phone, country, organization, registrationType, excursion, galaDinner, amount, paymentStatus, createdAt) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          `INSERT INTO participants (
+            id, fullName, email, phone, dialCode, country, organization, position, 
+            category, registrationType, excursion, galaDinner, amount, paymentStatus, 
+            createdAt, hearAbout, dietaryRestrictions, accommodation, specialNeeds
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+          )`,
           [
-            participantId, name, email.toLowerCase().trim(),
-            metadata?.phone || "", metadata?.country || "",
-            metadata?.organization || "", registrationType,
-            metadata?.excursion ? true : false, metadata?.galaDinner ? true : false,
-            amount, "pending", new Date().toISOString(),
+            participantId,
+            name,
+            email.toLowerCase().trim(),
+            metadata?.phone || "",
+            metadata?.dialCode || "",
+            metadata?.country || "",
+            metadata?.organization || "",
+            metadata?.position || "",
+            metadata?.category || "",
+            registrationType,
+            metadata?.excursion ? true : false,
+            metadata?.galaDinner ? true : false,
+            amount,
+            "pending",
+            new Date().toISOString(),
+            metadata?.hearAbout || "",
+            metadata?.dietaryRestrictions || "",
+            metadata?.accommodation || "",
+            metadata?.specialNeeds || ""
           ]
         );
         
         console.log(`✅ Participant created in DB: ${participantId}`);
+        console.log(`   Name: ${name}`);
+        console.log(`   Email: ${email}`);
+        console.log(`   Type: ${registrationType}`);
 
         const response = await axios.post(
           "https://api.paystack.co/transaction/initialize",
           { 
             email, 
-            amount: amount * 100, 
-            metadata: { participantId }, 
+            amount: amount * 100,
+            metadata: { participantId },
             callback_url: `${FRONTEND_URL}/payment-success` 
           },
           { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" } }
@@ -318,13 +333,12 @@ async function startServer() {
           const participantId = data.data.metadata?.participantId;
           
           if (!participantId) {
-            console.error("❌ Paystack response missing participantId in metadata:", data.data.metadata);
+            console.error("❌ Paystack response missing participantId in metadata");
             return res.status(500).json({ error: "Payment verification failed: Missing participant information" });
           }
           
           console.log(`✅ Payment verified for participant: ${participantId}`);
           
-          // Check if already processed
           const existing = await dbGet(`SELECT paymentStatus FROM participants WHERE id = $1`, [participantId]);
           if (!existing) {
             console.error(`❌ Participant not found in database: ${participantId}`);
@@ -336,7 +350,6 @@ async function startServer() {
             return res.json({ status: "success", participantId, alreadyProcessed: true });
           }
           
-          // Process the payment (email is sent async, won't block this response)
           await processSuccessfulPayment(participantId, reference);
           res.json({ status: "success", participantId });
         } else {
@@ -530,7 +543,6 @@ async function startServer() {
         if (!participant) return res.status(404).json({ error: "Participant not found or payment not confirmed" });
         const ticketPath = await generateTicket(participant);
         
-        // Send email asynchronously
         sendTicketEmail(participant, ticketPath)
           .then(() => console.log("📧 Resent ticket email to:", participant.email))
           .catch((err) => console.error("⚠️ Failed to resend email:", err.message));
