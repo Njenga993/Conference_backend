@@ -1,145 +1,33 @@
 // utils/sendTicketEmail.js
-import nodemailer from "nodemailer";
-import * as fs from "fs";
-import path from "path";
+import fs from 'fs';
+import path from 'path';
 import { fileURLToPath } from 'url';
+import sgMail from '@sendgrid/mail';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Email configuration with validation
-let transporter = null;
-let emailEnabled = false;
-let lastConnectionAttempt = null;
-let connectionAttempts = 0;
+// Initialize SendGrid
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.EMAIL_USER || 'registration@eaindigenousseedconference.org';
+const FROM_NAME = process.env.FROM_NAME || 'EA Indigenous Seed Conference 2026';
 
-/**
- * Validate email configuration
- */
-function validateEmailConfig() {
-  const required = ['EMAIL_HOST', 'EMAIL_PORT', 'EMAIL_USER', 'EMAIL_PASS'];
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    console.warn(`⚠️ Missing email config: ${missing.join(', ')}. Email sending will be disabled.`);
-    return false;
-  }
-  
-  const port = parseInt(process.env.EMAIL_PORT, 10);
-  if (isNaN(port) || port < 1 || port > 65535) {
-    console.warn(`⚠️ Invalid EMAIL_PORT: ${process.env.EMAIL_PORT}. Using default 587`);
-    process.env.EMAIL_PORT = '587';
-  }
-  
-  console.log(`📧 Email configured: ${process.env.EMAIL_HOST}:${process.env.EMAIL_PORT}`);
-  return true;
-}
+let sendgridEnabled = false;
 
-/**
- * Create and verify email transporter with retry logic
- */
-async function createTransporter() {
-  const configValid = validateEmailConfig();
-  if (!configValid) {
-    emailEnabled = false;
-    return null;
+if (SENDGRID_API_KEY && SENDGRID_API_KEY !== 'your_sendgrid_api_key_here' && SENDGRID_API_KEY.startsWith('SG.')) {
+  sgMail.setApiKey(SENDGRID_API_KEY);
+  
+  // Optional: Set EU data residency if needed
+  if (process.env.SENDGRID_EU_RESIDENCY === 'true') {
+    sgMail.setSubstitutionWrappers('{{', '}}');
+    console.log('🌍 SendGrid configured for EU data residency');
   }
   
-  const port = parseInt(process.env.EMAIL_PORT, 10);
-  
-  const transporterConfig = {
-    host: process.env.EMAIL_HOST,
-    port: port,
-    secure: port === 465, // true for 465, false for other ports
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    tls: {
-      rejectUnauthorized: false, // Allow self-signed certificates for testing
-    },
-    connectionTimeout: 15000, // 15 seconds
-    greetingTimeout: 15000,
-    socketTimeout: 20000, // 20 seconds
-    // Add debug logging for SMTP (optional, can be enabled for troubleshooting)
-    debug: process.env.SMTP_DEBUG === 'true',
-    logger: process.env.SMTP_DEBUG === 'true',
-  };
-  
-  // For port 587, ensure TLS is used
-  if (port === 587) {
-    transporterConfig.requireTLS = true;
-  }
-  
-  try {
-    const newTransporter = nodemailer.createTransport(transporterConfig);
-    
-    // Verify connection with timeout
-    const verifyPromise = new Promise((resolve, reject) => {
-      newTransporter.verify((error, success) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(success);
-        }
-      });
-      
-      // Timeout after 10 seconds
-      setTimeout(() => reject(new Error('SMTP verification timeout')), 10000);
-    });
-    
-    await verifyPromise;
-    
-    console.log(`✅ SMTP server ready on ${process.env.EMAIL_HOST}:${process.env.EMAIL_PORT}`);
-    emailEnabled = true;
-    connectionAttempts = 0;
-    return newTransporter;
-  } catch (error) {
-    console.error(`❌ SMTP connection failed (attempt ${connectionAttempts + 1}):`, error.message);
-    console.error(`   Host: ${process.env.EMAIL_HOST}:${process.env.EMAIL_PORT}`);
-    console.error(`   User: ${process.env.EMAIL_USER}`);
-    console.error(`   Common fixes:`);
-    console.error(`   - Check if the port is correct (587 for TLS, 465 for SSL, 25 for unencrypted)`);
-    console.error(`   - Verify your email provider allows SMTP connections`);
-    console.error(`   - Check if 2FA is enabled (may require app-specific password)`);
-    console.error(`   - Ensure network firewall allows outbound SMTP connections`);
-    
-    emailEnabled = false;
-    return null;
-  }
-}
-
-/**
- * Retry connection with exponential backoff
- */
-async function ensureTransporter() {
-  if (transporter && emailEnabled) {
-    return transporter;
-  }
-  
-  const now = Date.now();
-  // Rate limit connection attempts to once every 30 seconds
-  if (lastConnectionAttempt && (now - lastConnectionAttempt) < 30000) {
-    return null;
-  }
-  
-  lastConnectionAttempt = now;
-  connectionAttempts++;
-  
-  transporter = await createTransporter();
-  return transporter;
-}
-
-// Initialize transporter on module load
-ensureTransporter().catch(() => {});
-
-/**
- * Format phone number for display
- */
-function formatPhone(participant) {
-  if (!participant.phone) return 'Not provided';
-  const dialCode = participant.dialcode || participant.dialCode || '';
-  return `${dialCode} ${participant.phone}`.trim();
+  sendgridEnabled = true;
+  console.log('✅ SendGrid initialized successfully');
+} else {
+  console.warn('⚠️ SendGrid API key not configured or invalid');
+  console.warn('   Email sending will use SMTP fallback');
 }
 
 /**
@@ -150,6 +38,15 @@ function getShortId(participant) {
     return participant.paymentReference.slice(0, 8).toUpperCase();
   }
   return participant.id.replace(/-/g, "").slice(0, 8).toUpperCase();
+}
+
+/**
+ * Format phone number for display
+ */
+function formatPhone(participant) {
+  if (!participant.phone) return 'Not provided';
+  const dialCode = participant.dialcode || participant.dialCode || '';
+  return `${dialCode} ${participant.phone}`.trim();
 }
 
 /**
@@ -172,63 +69,14 @@ function getEventDates() {
 }
 
 /**
- * Generate plain text email content
+ * Generate HTML email content
  */
-function getPlainTextContent(participant, ticketPath, eventDates) {
-  const firstName = (participant.fullName || "Participant").split(" ")[0];
-  const shortId = getShortId(participant);
-  const regType = participant.registrationType || "delegate";
-  
-  return [
-    `Dear ${firstName},`,
-    "",
-    "Thank you for registering for the 1st EA Indigenous Seed Conference 2026.",
-    "Your conference ticket is attached to this email.",
-    "",
-    "EVENT DETAILS",
-    `Date: ${eventDates.range}`,
-    `Venue: ${eventDates.venue}`,
-    "",
-    "YOUR REGISTRATION",
-    `Name: ${participant.fullName || ""}`,
-    `Email: ${participant.email || ""}`,
-    `Phone: ${formatPhone(participant)}`,
-    `Registration Type: ${regType.charAt(0).toUpperCase() + regType.slice(1)}`,
-    participant.organization ? `Organisation: ${participant.organization}` : "",
-    participant.country ? `Country: ${participant.country}` : "",
-    `Reference: ${shortId}`,
-    `Amount Paid: $${participant.amount || 0}`,
-    "",
-    participant.excursion ? `✓ Field Excursion Included` : "",
-    participant.galaDinner ? `✓ Gala Dinner Included` : "",
-    "",
-    "IMPORTANT INFORMATION",
-    "• Please bring a printed or digital copy of your ticket to the event",
-    "• The QR code on your ticket will be scanned at check-in",
-    "• Check-in opens at 8:00 AM on the first day",
-    "• Please arrive early to complete the registration process",
-    "",
-    "If you have any questions, please reply to this email.",
-    "",
-    "We look forward to seeing you in Nairobi!",
-    "",
-    "Warm regards,",
-    "The Organising Team",
-    "EA Indigenous Seed Conference 2026",
-    "www.eaindigenousseedconference.org",
-    "",
-    "P.S. Don't forget to follow us on social media for updates!"
-  ].filter(line => line !== "").join("\n");
-}
-
-/**
- * Generate HTML email content with better styling
- */
-function getHtmlContent(participant, ticketPath, eventDates) {
+function getHtmlContent(participant, eventDates) {
   const firstName = (participant.fullName || "Participant").split(" ")[0];
   const shortId = getShortId(participant);
   const regType = participant.registrationType || "delegate";
   const formattedPhone = formatPhone(participant);
+  const ticketUrl = `${process.env.FRONTEND_URL}/ticket/${participant.id}`;
   
   return `
 <!DOCTYPE html>
@@ -248,6 +96,9 @@ function getHtmlContent(participant, ticketPath, eventDates) {
       max-width: 600px;
       margin: 0 auto;
       background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
     }
     .header {
       background: linear-gradient(135deg, #1a472a 0%, #0e2a1a 100%);
@@ -386,9 +237,6 @@ function getHtmlContent(participant, ticketPath, eventDates) {
       text-decoration: none;
     }
     @media only screen and (max-width: 600px) {
-      .container {
-        width: 100% !important;
-      }
       .detail-row {
         flex-direction: column;
       }
@@ -413,7 +261,7 @@ function getHtmlContent(participant, ticketPath, eventDates) {
       
       <p style="margin: 0 0 16px; font-size: 15px; color: #555; line-height: 1.6;">
         Thank you for registering for the 1st East African Indigenous Seed Conference 2026!
-        Your registration is confirmed and your conference ticket is attached to this email.
+        Your registration is confirmed. Your conference ticket is attached to this email.
       </p>
       
       <div class="event-card">
@@ -485,7 +333,7 @@ function getHtmlContent(participant, ticketPath, eventDates) {
       </div>
       
       <div style="text-align: center;">
-        <a href="${process.env.FRONTEND_URL}/ticket/${participant.id}" class="button">
+        <a href="${ticketUrl}" class="button">
           View Ticket Online
         </a>
       </div>
@@ -512,97 +360,218 @@ function getHtmlContent(participant, ticketPath, eventDates) {
 }
 
 /**
- * Main function to send ticket email
+ * Generate plain text email content
  */
-async function sendTicketEmail(participant, ticketPath) {
-  // Check if email is enabled
-  if (!emailEnabled && !transporter) {
-    console.log('📧 Email sending disabled. Would have sent to:', participant.email);
-    console.log('   Ticket available at:', ticketPath);
-    console.log('   Please configure EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS');
-    return { success: false, disabled: true, message: 'Email service not configured' };
-  }
+function getPlainTextContent(participant, eventDates) {
+  const firstName = (participant.fullName || "Participant").split(" ")[0];
+  const shortId = getShortId(participant);
+  const regType = participant.registrationType || "delegate";
+  const formattedPhone = formatPhone(participant);
+  const ticketUrl = `${process.env.FRONTEND_URL}/ticket/${participant.id}`;
   
-  // Ensure transporter is available
-  if (!transporter) {
-    const newTransporter = await ensureTransporter();
-    if (!newTransporter) {
-      console.error(`❌ Cannot send email to ${participant.email}: SMTP not configured`);
-      return { success: false, error: 'SMTP service unavailable' };
-    }
-    transporter = newTransporter;
-  }
-  
-  // Validate inputs
-  if (!participant || !participant.email) {
-    console.error('❌ Cannot send email: Missing participant email');
-    return { success: false, error: 'Missing participant email' };
-  }
-  
-  if (!ticketPath || !fs.existsSync(ticketPath)) {
-    console.error(`❌ Cannot send email: Ticket file not found at ${ticketPath}`);
-    return { success: false, error: 'Ticket file not found' };
+  return [
+    `Dear ${firstName},`,
+    "",
+    "Thank you for registering for the 1st EA Indigenous Seed Conference 2026.",
+    "Your conference ticket is attached to this email.",
+    "",
+    "EVENT DETAILS",
+    `Date: ${eventDates.range}`,
+    `Venue: ${eventDates.venue}`,
+    "",
+    "YOUR REGISTRATION",
+    `Name: ${participant.fullName || ""}`,
+    `Email: ${participant.email || ""}`,
+    `Phone: ${formattedPhone}`,
+    `Registration Type: ${regType.charAt(0).toUpperCase() + regType.slice(1)}`,
+    participant.organization ? `Organisation: ${participant.organization}` : "",
+    participant.country ? `Country: ${participant.country}` : "",
+    `Reference: ${shortId}`,
+    `Amount Paid: $${participant.amount || 0}`,
+    "",
+    participant.excursion ? `✓ Field Excursion Included` : "",
+    participant.galaDinner ? `✓ Gala Dinner Included` : "",
+    "",
+    "IMPORTANT INFORMATION",
+    "• Please bring a printed or digital copy of your ticket to the event",
+    "• The QR code on your ticket will be scanned at check-in",
+    "• Check-in opens at 8:00 AM on the first day",
+    "• Please arrive early to complete the registration process",
+    "",
+    `View your ticket online: ${ticketUrl}`,
+    "",
+    "If you have any questions, please reply to this email.",
+    "",
+    "We look forward to seeing you in Nairobi!",
+    "",
+    "Warm regards,",
+    "The Organising Team",
+    "EA Indigenous Seed Conference 2026",
+    "www.eaindigenousseedconference.org",
+  ].filter(line => line !== "").join("\n");
+}
+
+/**
+ * Send email using SendGrid
+ */
+async function sendWithSendGrid(participant, ticketPath) {
+  if (!sendgridEnabled) {
+    throw new Error('SendGrid not configured');
   }
   
   const eventDates = getEventDates();
   
+  // Read ticket file as base64
+  const ticketAttachment = fs.readFileSync(ticketPath);
+  const ticketBase64 = ticketAttachment.toString('base64');
+  const shortId = getShortId(participant);
+  
+  const msg = {
+    to: participant.email,
+    from: {
+      email: FROM_EMAIL,
+      name: FROM_NAME
+    },
+    subject: "🎟️ Your Conference Ticket - EA Indigenous Seed Conference 2026",
+    text: getPlainTextContent(participant, eventDates),
+    html: getHtmlContent(participant, eventDates),
+    attachments: [
+      {
+        content: ticketBase64,
+        filename: `EA-Seed-Conference-Ticket-${shortId}.pdf`,
+        type: "application/pdf",
+        disposition: "attachment"
+      }
+    ],
+    // Optional: Track opens and clicks
+    tracking_settings: {
+      click_tracking: { enable: true },
+      open_tracking: { enable: true }
+    }
+  };
+  
+  // Add BCC if configured
+  if (process.env.SMTP_BCC) {
+    msg.bcc = process.env.SMTP_BCC;
+  }
+  
+  console.log(`📧 Sending via SendGrid to ${participant.email}...`);
+  const response = await sgMail.send(msg);
+  console.log(`✅ Email sent via SendGrid to ${participant.email}`);
+  return { success: true, method: 'sendgrid', response };
+}
+
+/**
+ * Fallback SMTP sender (if SendGrid fails)
+ */
+async function sendWithSMTP(participant, ticketPath) {
+  console.log(`🔄 Falling back to SMTP for ${participant.email}...`);
+  
+  const nodemailer = await import('nodemailer');
+  const transporter = nodemailer.default.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: parseInt(process.env.EMAIL_PORT, 10) || 587,
+    secure: parseInt(process.env.EMAIL_PORT, 10) === 465,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    tls: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 10000,
+  });
+  
+  const shortId = getShortId(participant);
+  
   const mailOptions = {
-    from: `"EA Indigenous Seed Conference 2026" <${process.env.EMAIL_USER}>`,
+    from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
     to: participant.email,
     bcc: process.env.SMTP_BCC || null,
     subject: "🎟️ Your Conference Ticket - EA Indigenous Seed Conference 2026",
-    text: getPlainTextContent(participant, ticketPath, eventDates),
-    html: getHtmlContent(participant, ticketPath, eventDates),
+    text: getPlainTextContent(participant, getEventDates()),
+    html: getHtmlContent(participant, getEventDates()),
     attachments: [
       {
-        filename: `EA-Seed-Conference-Ticket-${getShortId(participant)}.pdf`,
+        filename: `EA-Seed-Conference-Ticket-${shortId}.pdf`,
         path: ticketPath,
         contentType: "application/pdf",
       },
     ],
   };
   
-  // Remove BCC if not set
-  if (!mailOptions.bcc) {
-    delete mailOptions.bcc;
+  if (!mailOptions.bcc) delete mailOptions.bcc;
+  
+  const info = await transporter.sendMail(mailOptions);
+  console.log(`✅ Email sent via SMTP to ${participant.email}`);
+  return { success: true, method: 'smtp', messageId: info.messageId };
+}
+
+/**
+ * Main function to send ticket email
+ */
+async function sendTicketEmail(participant, ticketPath) {
+  // Validate inputs
+  if (!participant || !participant.email) {
+    console.error('❌ Cannot send email: Missing participant email');
+    throw new Error('Missing participant email');
   }
   
-  try {
-    console.log(`📧 Sending email to ${participant.email}...`);
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent successfully to ${participant.email}`);
-    console.log(`   Message ID: ${info.messageId}`);
-    console.log(`   Ticket attached: ${mailOptions.attachments[0].filename}`);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error(`❌ Failed to send email to ${participant.email}:`, error.message);
-    
-    // Provide specific troubleshooting tips based on error
-    if (error.code === 'ECONNREFUSED') {
-      console.error('   💡 Connection refused. Check:');
-      console.error(`      - Host: ${process.env.EMAIL_HOST} is reachable?`);
-      console.error(`      - Port: ${process.env.EMAIL_PORT} is open?`);
-      console.error('      - Firewall allows outbound SMTP connections?');
-    } else if (error.code === 'EAUTH') {
-      console.error('   💡 Authentication failed. Check:');
-      console.error(`      - Email: ${process.env.EMAIL_USER}`);
-      console.error('      - Password is correct?');
-      console.error('      - App-specific password required if 2FA enabled?');
-    } else if (error.code === 'ESOCKET') {
-      console.error('   💡 Socket error. Check:');
-      console.error('      - Network connectivity');
-      console.error('      - Timeout settings');
-      console.error('      - SSL/TLS configuration');
-    } else if (error.code === 'ETIMEDOUT') {
-      console.error('   💡 Connection timeout. Check:');
-      console.error('      - Server response time');
-      console.error('      - Firewall rules');
+  if (!ticketPath || !fs.existsSync(ticketPath)) {
+    console.error(`❌ Ticket file not found: ${ticketPath}`);
+    throw new Error(`Ticket file not found at path: ${ticketPath}`);
+  }
+  
+  console.log(`📧 Attempting to send email to ${participant.email}...`);
+  
+  // Try SendGrid first if enabled
+  if (sendgridEnabled) {
+    try {
+      const result = await sendWithSendGrid(participant, ticketPath);
+      return result;
+    } catch (sendgridError) {
+      console.error(`⚠️ SendGrid failed for ${participant.email}:`, sendgridError.message);
+      if (sendgridError.response) {
+        console.error('SendGrid error details:', JSON.stringify(sendgridError.response.body, null, 2));
+      }
+      
+      // Check if SMTP fallback is configured
+      if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
+        console.log('🔄 Attempting SMTP fallback...');
+        try {
+          const smtpResult = await sendWithSMTP(participant, ticketPath);
+          return smtpResult;
+        } catch (smtpError) {
+          console.error(`❌ SMTP fallback also failed:`, smtpError.message);
+          throw new Error(`Both SendGrid and SMTP failed: ${smtpError.message}`);
+        }
+      } else {
+        throw new Error(`SendGrid failed: ${sendgridError.message}`);
+      }
     }
-    
-    throw new Error(`Email sending failed: ${error.message}`);
+  } 
+  // SendGrid not configured, try SMTP only
+  else if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
+    console.log('📧 SendGrid not configured, using SMTP...');
+    try {
+      const result = await sendWithSMTP(participant, ticketPath);
+      return result;
+    } catch (smtpError) {
+      console.error(`❌ SMTP failed:`, smtpError.message);
+      throw new Error(`SMTP email failed: ${smtpError.message}`);
+    }
+  } 
+  // No email configuration
+  else {
+    console.warn(`⚠️ No email configuration found. Would have sent email to ${participant.email}`);
+    console.warn('   Please configure SENDGRID_API_KEY or EMAIL_HOST/EMAIL_USER');
+    return { 
+      success: false, 
+      disabled: true, 
+      message: 'Email service not configured',
+      participant: participant.email 
+    };
   }
 }
 
-// Export the function and utility for testing
 export default sendTicketEmail;
-export { validateEmailConfig, ensureTransporter };
