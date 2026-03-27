@@ -168,8 +168,8 @@ async function startServer() {
     /*
     ========================================
     PAYMENT PROCESSING HELPER
-    ========================================
     WITH DETAILED DEBUG LOGGING
+    ALL COLUMN NAMES IN LOWERCASE
     ========================================
     */
     async function processSuccessfulPayment(participantId, reference) {
@@ -177,9 +177,12 @@ async function startServer() {
       console.log(`Processing payment for participant: ${participantId}`);
       console.log(`${"=".repeat(70)}`);
       
-      // Step 1: Get the participant
+      // Step 1: Get the participant (all column names in lowercase)
       console.log(`[STEP 1] Fetching participant from database...`);
-      const participant = await dbGet(`SELECT id, fullName, email, paymentStatus, paymentReference FROM participants WHERE id = $1`, [participantId]);
+      const participant = await dbGet(
+        `SELECT id, fullname, email, paymentstatus, paymentreference FROM participants WHERE id = $1`, 
+        [participantId]
+      );
       
       if (!participant) {
         console.error(`❌ [ERROR] Participant not found in database: ${participantId}`);
@@ -187,18 +190,18 @@ async function startServer() {
       }
       
       console.log(`✅ Participant found:`);
-      console.log(`   - Name: ${participant.fullName}`);
+      console.log(`   - Name: ${participant.fullname}`);
       console.log(`   - Email: ${participant.email}`);
-      console.log(`   - Current paymentStatus: "${participant.paymentStatus}"`);
-      console.log(`   - Current paymentReference: "${participant.paymentReference}"`);
+      console.log(`   - Current paymentstatus: "${participant.paymentstatus}"`);
+      console.log(`   - Current paymentreference: "${participant.paymentreference}"`);
       
-      // Step 2: Update payment status
+      // Step 2: Update payment status (using lowercase column names)
       console.log(`\n[STEP 2] Updating payment status in database...`);
-      console.log(`   SQL: UPDATE participants SET paymentStatus = 'paid', paymentReference = '${reference}' WHERE id = '${participantId}'`);
+      console.log(`   SQL: UPDATE participants SET paymentstatus = 'paid', paymentreference = '${reference}' WHERE id = '${participantId}'`);
       
       try {
         await dbRun(
-          `UPDATE participants SET paymentStatus = $1, paymentReference = $2 WHERE id = $3`,
+          `UPDATE participants SET paymentstatus = $1, paymentreference = $2 WHERE id = $3`,
           ["paid", reference, participantId]
         );
         console.log(`✅ UPDATE query executed successfully`);
@@ -211,9 +214,12 @@ async function startServer() {
       
       // Step 3: Verify the update was successful
       console.log(`\n[STEP 3] Verifying update was successful...`);
-      console.log(`   SQL: SELECT paymentStatus, paymentReference FROM participants WHERE id = '${participantId}'`);
+      console.log(`   SQL: SELECT paymentstatus, paymentreference FROM participants WHERE id = '${participantId}'`);
       
-      const updated = await dbGet(`SELECT paymentStatus, paymentReference FROM participants WHERE id = $1`, [participantId]);
+      const updated = await dbGet(
+        `SELECT paymentstatus, paymentreference FROM participants WHERE id = $1`, 
+        [participantId]
+      );
       
       if (!updated) {
         console.error(`❌ [CRITICAL ERROR] Participant disappeared after UPDATE!`);
@@ -221,25 +227,67 @@ async function startServer() {
       }
       
       console.log(`✅ Database verification complete:`);
-      console.log(`   - paymentStatus is now: "${updated.paymentStatus}"`);
-      console.log(`   - paymentReference is now: "${updated.paymentReference}"`);
+      console.log(`   - paymentstatus is now: "${updated.paymentstatus}"`);
+      console.log(`   - paymentreference is now: "${updated.paymentreference}"`);
       
-      if (updated.paymentStatus !== "paid") {
-        console.error(`\n❌ [CRITICAL ERROR] Payment status is still "${updated.paymentStatus}" after UPDATE!`);
+      if (updated.paymentstatus !== "paid") {
+        console.error(`\n❌ [CRITICAL ERROR] Payment status is still "${updated.paymentstatus}" after UPDATE!`);
         console.error(`   This means the UPDATE query did not change the value`);
         console.error(`   Check: database constraints, row permissions, data type issues`);
+        
+        // Attempt direct update as fallback
+        console.log(`\n   Attempting direct SQL update as fallback...`);
+        try {
+          await dbRun(`UPDATE participants SET paymentstatus = 'paid' WHERE id = $1`, [participantId]);
+          const finalCheck = await dbGet(`SELECT paymentstatus FROM participants WHERE id = $1`, [participantId]);
+          console.log(`   Fallback result: paymentstatus = "${finalCheck?.paymentstatus}"`);
+        } catch (fallbackErr) {
+          console.error(`   Fallback also failed: ${fallbackErr.message}`);
+        }
       } else {
         console.log(`✅ [SUCCESS] Payment status correctly updated to "paid"`);
       }
       
-      // Step 4: Generate ticket
+      // Step 4: Generate ticket - need to get full participant data with lowercase column names
       console.log(`\n[STEP 4] Generating conference ticket...`);
-      const ticketPath = await generateTicket(participant);
+      const fullParticipant = await dbGet(
+        `SELECT * FROM participants WHERE id = $1`, 
+        [participantId]
+      );
+      
+      // Map database column names to what generateTicket expects
+      const participantForTicket = {
+        id: fullParticipant.id,
+        fullName: fullParticipant.fullname,
+        email: fullParticipant.email,
+        phone: fullParticipant.phone,
+        dialCode: fullParticipant.dialcode,
+        country: fullParticipant.country,
+        organization: fullParticipant.organization,
+        position: fullParticipant.position,
+        category: fullParticipant.category,
+        registrationType: fullParticipant.registrationtype,
+        excursion: fullParticipant.excursion,
+        galaDinner: fullParticipant.galadinner,
+        amount: fullParticipant.amount,
+        paymentStatus: fullParticipant.paymentstatus,
+        paymentReference: fullParticipant.paymentreference,
+        hearAbout: fullParticipant.hearabout,
+        dietaryRestrictions: fullParticipant.dietaryrestrictions,
+        accommodation: fullParticipant.accommodation,
+        specialNeeds: fullParticipant.specialneeds,
+        createdAt: fullParticipant.createdat,
+        checkedIn: fullParticipant.checkedin,
+        checkedInAt: fullParticipant.checkedinat,
+        checkedInBy: fullParticipant.checkedinby
+      };
+      
+      const ticketPath = await generateTicket(participantForTicket);
       console.log(`🎫 Ticket generated at: ${ticketPath}`);
       
       // Step 5: Send email asynchronously (don't block payment confirmation)
       console.log(`\n[STEP 5] Sending confirmation email (async, non-blocking)...`);
-      sendTicketEmail(participant, ticketPath)
+      sendTicketEmail(participantForTicket, ticketPath)
         .then(() => {
           console.log(`📧 Email sent successfully to: ${participant.email}`);
         })
@@ -250,7 +298,7 @@ async function startServer() {
         });
       
       console.log(`${"=".repeat(70)}\n`);
-      return participant;
+      return participantForTicket;
     }
 
     /*
@@ -298,7 +346,7 @@ async function startServer() {
 
       const registrationType = metadata?.registrationType || "";
       const existing = await dbGet(
-        `SELECT id FROM participants WHERE email = $1 AND registrationType = $2 AND paymentStatus = 'paid'`,
+        `SELECT id FROM participants WHERE email = $1 AND registrationtype = $2 AND paymentstatus = 'paid'`,
         [email.toLowerCase().trim(), registrationType]
       ).catch(() => null);
 
@@ -306,12 +354,12 @@ async function startServer() {
 
       const participantId = uuidv4();
       try {
-        // ✅ INSERT ALL FIELDS FROM REGISTRATION FORM
+        // INSERT ALL FIELDS FROM REGISTRATION FORM (all lowercase column names)
         await dbRun(
           `INSERT INTO participants (
-            id, fullName, email, phone, dialCode, country, organization, position, 
-            category, registrationType, excursion, galaDinner, amount, paymentStatus, 
-            createdAt, hearAbout, dietaryRestrictions, accommodation, specialNeeds
+            id, fullname, email, phone, dialcode, country, organization, position, 
+            category, registrationtype, excursion, galadinner, amount, paymentstatus, 
+            createdat, hearabout, dietaryrestrictions, accommodation, specialneeds
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
           )`,
@@ -357,7 +405,7 @@ async function startServer() {
         console.log(`✅ Paystack initialized for ${participantId}:`, response.data.data.reference);
         res.json(response.data.data);
       } catch (error) {
-        await dbRun(`UPDATE participants SET paymentStatus = $1 WHERE id = $2`, ["failed", participantId]).catch(() => {});
+        await dbRun(`UPDATE participants SET paymentstatus = $1 WHERE id = $2`, ["failed", participantId]).catch(() => {});
         console.error("Payment init error:", error.response?.data || error.message);
         res.status(500).json({ error: "Payment initialization failed" });
       }
@@ -393,13 +441,13 @@ async function startServer() {
           
           console.log(`✅ Payment verified for participant: ${participantId}`);
           
-          const existing = await dbGet(`SELECT paymentStatus FROM participants WHERE id = $1`, [participantId]);
+          const existing = await dbGet(`SELECT paymentstatus FROM participants WHERE id = $1`, [participantId]);
           if (!existing) {
             console.error(`❌ Participant not found in database: ${participantId}`);
             return res.status(404).json({ error: "Participant not found. Please contact support." });
           }
           
-          if (existing.paymentStatus === "paid") {
+          if (existing.paymentstatus === "paid") {
             console.log(`⚠️ Payment already processed for ${participantId}`);
             return res.json({ status: "success", participantId, alreadyProcessed: true });
           }
@@ -448,13 +496,13 @@ async function startServer() {
       }
       
       try {
-        const existing = await dbGet(`SELECT paymentStatus FROM participants WHERE id = $1`, [participantId]);
+        const existing = await dbGet(`SELECT paymentstatus FROM participants WHERE id = $1`, [participantId]);
         if (!existing) {
           console.error(`❌ Webhook: Participant not found: ${participantId}`);
           return;
         }
         
-        if (existing.paymentStatus === "paid") { 
+        if (existing.paymentstatus === "paid") { 
           console.log("⚠️ Already processed:", participantId); 
           return; 
         }
@@ -474,9 +522,37 @@ async function startServer() {
     app.get("/ticket/:participantId", async (req, res) => {
       const safeId = path.basename(req.params.participantId);
       try {
-        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentStatus = 'paid'`, [safeId]);
+        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentstatus = 'paid'`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Ticket not found" });
-        const ticketPath = await ensureTicketExists(participant);
+        
+        // Map database columns to what ensureTicketExists expects
+        const participantForTicket = {
+          id: participant.id,
+          fullName: participant.fullname,
+          email: participant.email,
+          phone: participant.phone,
+          dialCode: participant.dialcode,
+          country: participant.country,
+          organization: participant.organization,
+          position: participant.position,
+          category: participant.category,
+          registrationType: participant.registrationtype,
+          excursion: participant.excursion,
+          galaDinner: participant.galadinner,
+          amount: participant.amount,
+          paymentStatus: participant.paymentstatus,
+          paymentReference: participant.paymentreference,
+          hearAbout: participant.hearabout,
+          dietaryRestrictions: participant.dietaryrestrictions,
+          accommodation: participant.accommodation,
+          specialNeeds: participant.specialneeds,
+          createdAt: participant.createdat,
+          checkedIn: participant.checkedin,
+          checkedInAt: participant.checkedinat,
+          checkedInBy: participant.checkedinby
+        };
+        
+        const ticketPath = await ensureTicketExists(participantForTicket);
         res.setHeader("Content-Type", "application/pdf");
         res.sendFile(ticketPath, (err) => { if (err && !res.headersSent) res.status(404).json({ error: "Ticket not found" }); });
       } catch (err) { if (!res.headersSent) res.status(500).json({ error: "Could not load ticket" }); }
@@ -490,9 +566,37 @@ async function startServer() {
     app.get("/ticket-download/:participantId", async (req, res) => {
       const safeId = path.basename(req.params.participantId);
       try {
-        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentStatus = 'paid'`, [safeId]);
+        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentstatus = 'paid'`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Ticket not found" });
-        const ticketPath = await ensureTicketExists(participant);
+        
+        // Map database columns
+        const participantForTicket = {
+          id: participant.id,
+          fullName: participant.fullname,
+          email: participant.email,
+          phone: participant.phone,
+          dialCode: participant.dialcode,
+          country: participant.country,
+          organization: participant.organization,
+          position: participant.position,
+          category: participant.category,
+          registrationType: participant.registrationtype,
+          excursion: participant.excursion,
+          galaDinner: participant.galadinner,
+          amount: participant.amount,
+          paymentStatus: participant.paymentstatus,
+          paymentReference: participant.paymentreference,
+          hearAbout: participant.hearabout,
+          dietaryRestrictions: participant.dietaryrestrictions,
+          accommodation: participant.accommodation,
+          specialNeeds: participant.specialneeds,
+          createdAt: participant.createdat,
+          checkedIn: participant.checkedin,
+          checkedInAt: participant.checkedinat,
+          checkedInBy: participant.checkedinby
+        };
+        
+        const ticketPath = await ensureTicketExists(participantForTicket);
         res.download(ticketPath, "conference-ticket-" + safeId + ".pdf", (err) => { if (err && !res.headersSent) res.status(404).json({ error: "Ticket not found" }); });
       } catch (err) { if (!res.headersSent) res.status(500).json({ error: "Could not download ticket" }); }
     });
@@ -506,16 +610,26 @@ async function startServer() {
       const safeId = path.basename(req.params.participantId);
       try {
         const participant = await dbGet(
-          `SELECT id, fullName, email, country, organization, registrationType, excursion, galaDinner, amount, paymentStatus, checkedIn, checkedInAt, checkedInBy FROM participants WHERE id = $1`,
+          `SELECT id, fullname, email, country, organization, registrationtype, excursion, galadinner, amount, paymentstatus, checkedin, checkedinat, checkedinby FROM participants WHERE id = $1`,
           [safeId]
         );
         if (!participant) return res.status(404).json({ valid: false, error: "Participant not found" });
-        if (participant.paymentStatus !== "paid") return res.json({ valid: false, error: "Payment not confirmed", paymentStatus: participant.paymentStatus });
+        if (participant.paymentstatus !== "paid") return res.json({ valid: false, error: "Payment not confirmed", paymentStatus: participant.paymentstatus });
         res.json({
           valid: true,
           participant: {
-            id: participant.id, fullName: participant.fullName, email: participant.email, country: participant.country, organization: participant.organization, registrationType: participant.registrationType,
-            excursion: !!participant.excursion, galaDinner: !!participant.galaDinner, amount: participant.amount, checkedIn: !!participant.checkedIn, checkedInAt: participant.checkedInAt, checkedInBy: participant.checkedInBy,
+            id: participant.id, 
+            fullName: participant.fullname, 
+            email: participant.email, 
+            country: participant.country, 
+            organization: participant.organization, 
+            registrationType: participant.registrationtype,
+            excursion: !!participant.excursion, 
+            galaDinner: !!participant.galadinner, 
+            amount: participant.amount, 
+            checkedIn: !!participant.checkedin, 
+            checkedInAt: participant.checkedinat, 
+            checkedInBy: participant.checkedinby,
           },
         });
       } catch (err) { res.status(500).json({ valid: false, error: "Server error" }); }
@@ -530,13 +644,13 @@ async function startServer() {
       const safeId = path.basename(req.params.participantId);
       const staffName = req.body?.staffName || req.user.role;
       try {
-        const participant = await dbGet(`SELECT id, fullName, paymentStatus, checkedIn FROM participants WHERE id = $1`, [safeId]);
+        const participant = await dbGet(`SELECT id, fullname, paymentstatus, checkedin FROM participants WHERE id = $1`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Participant not found" });
-        if (participant.paymentStatus !== "paid") return res.status(400).json({ error: "Cannot check in — payment not confirmed" });
-        if (participant.checkedIn) return res.status(409).json({ error: "Already checked in", alreadyCheckedIn: true });
-        await dbRun(`UPDATE participants SET checkedIn = $1, checkedInAt = $2, checkedInBy = $3 WHERE id = $4`, [true, new Date().toISOString(), staffName, safeId]);
-        console.log(`✅ Checked in: ${participant.fullName} by ${staffName}`);
-        res.json({ success: true, message: `${participant.fullName} checked in successfully` });
+        if (participant.paymentstatus !== "paid") return res.status(400).json({ error: "Cannot check in — payment not confirmed" });
+        if (participant.checkedin) return res.status(409).json({ error: "Already checked in", alreadyCheckedIn: true });
+        await dbRun(`UPDATE participants SET checkedin = $1, checkedinat = $2, checkedinby = $3 WHERE id = $4`, [true, new Date().toISOString(), staffName, safeId]);
+        console.log(`✅ Checked in: ${participant.fullname} by ${staffName}`);
+        res.json({ success: true, message: `${participant.fullname} checked in successfully` });
       } catch (err) { console.error("Check-in error:", err.message); res.status(500).json({ error: "Check-in failed" }); }
     });
 
@@ -551,10 +665,10 @@ async function startServer() {
         let sql = `SELECT * FROM participants`;
         const params = [];
         const conditions = [];
-        if (status) { conditions.push(`paymentStatus = $${params.length + 1}`); params.push(status); }
-        if (type) { conditions.push(`registrationType = $${params.length + 1}`); params.push(type); }
+        if (status) { conditions.push(`paymentstatus = $${params.length + 1}`); params.push(status); }
+        if (type) { conditions.push(`registrationtype = $${params.length + 1}`); params.push(type); }
         if (conditions.length) sql += ` WHERE ` + conditions.join(" AND ");
-        sql += ` ORDER BY createdAt DESC`;
+        sql += ` ORDER BY createdat DESC`;
         const rows = await dbAll(sql, params);
         res.json(rows);
       } catch (err) { res.status(500).json({ error: err.message }); }
@@ -571,10 +685,10 @@ async function startServer() {
         let sql = `SELECT * FROM participants`;
         const params = [];
         const conditions = [];
-        if (status) { conditions.push(`paymentStatus = $${params.length + 1}`); params.push(status); }
-        if (type) { conditions.push(`registrationType = $${params.length + 1}`); params.push(type); }
+        if (status) { conditions.push(`paymentstatus = $${params.length + 1}`); params.push(status); }
+        if (type) { conditions.push(`registrationtype = $${params.length + 1}`); params.push(type); }
         if (conditions.length) sql += ` WHERE ` + conditions.join(" AND ");
-        sql += ` ORDER BY createdAt DESC`;
+        sql += ` ORDER BY createdat DESC`;
         const rows = await dbAll(sql, params);
         if (rows.length === 0) return res.status(404).json({ error: "No participants found" });
         const parser = new Parser();
@@ -593,11 +707,39 @@ async function startServer() {
     app.post("/admin/resend-ticket/:participantId", adminLimiter, requireAuth(["admin"]), async (req, res) => {
       const safeId = path.basename(req.params.participantId);
       try {
-        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentStatus = 'paid'`, [safeId]);
+        const participant = await dbGet(`SELECT * FROM participants WHERE id = $1 AND paymentstatus = 'paid'`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Participant not found or payment not confirmed" });
-        const ticketPath = await generateTicket(participant);
         
-        sendTicketEmail(participant, ticketPath)
+        // Map database columns
+        const participantForTicket = {
+          id: participant.id,
+          fullName: participant.fullname,
+          email: participant.email,
+          phone: participant.phone,
+          dialCode: participant.dialcode,
+          country: participant.country,
+          organization: participant.organization,
+          position: participant.position,
+          category: participant.category,
+          registrationType: participant.registrationtype,
+          excursion: participant.excursion,
+          galaDinner: participant.galadinner,
+          amount: participant.amount,
+          paymentStatus: participant.paymentstatus,
+          paymentReference: participant.paymentreference,
+          hearAbout: participant.hearabout,
+          dietaryRestrictions: participant.dietaryrestrictions,
+          accommodation: participant.accommodation,
+          specialNeeds: participant.specialneeds,
+          createdAt: participant.createdat,
+          checkedIn: participant.checkedin,
+          checkedInAt: participant.checkedinat,
+          checkedInBy: participant.checkedinby
+        };
+        
+        const ticketPath = await generateTicket(participantForTicket);
+        
+        sendTicketEmail(participantForTicket, ticketPath)
           .then(() => console.log("📧 Resent ticket email to:", participant.email))
           .catch((err) => console.error("⚠️ Failed to resend email:", err.message));
         
@@ -614,16 +756,16 @@ async function startServer() {
       try {
         const [total, paid, pending, failed, checkedIn, byType, revenue] = await Promise.all([
           dbGet(`SELECT COUNT(*) as count FROM participants`),
-          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentStatus = 'paid'`),
-          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentStatus = 'pending'`),
-          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentStatus = 'failed'`),
-          dbGet(`SELECT COUNT(*) as count FROM participants WHERE checkedIn = $1`, [true]),
-          dbAll(`SELECT registrationType, COUNT(*) as count FROM participants WHERE paymentStatus = 'paid' GROUP BY registrationType`),
-          dbGet(`SELECT SUM(amount) as total FROM participants WHERE paymentStatus = 'paid'`),
+          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentstatus = 'paid'`),
+          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentstatus = 'pending'`),
+          dbGet(`SELECT COUNT(*) as count FROM participants WHERE paymentstatus = 'failed'`),
+          dbGet(`SELECT COUNT(*) as count FROM participants WHERE checkedin = $1`, [true]),
+          dbAll(`SELECT registrationtype, COUNT(*) as count FROM participants WHERE paymentstatus = 'paid' GROUP BY registrationtype`),
+          dbGet(`SELECT SUM(amount) as total FROM participants WHERE paymentstatus = 'paid'`),
         ]);
         res.json({
           registrations: { total: total.count, paid: paid.count, pending: pending.count, failed: failed.count, checkedIn: checkedIn.count, },
-          byType: byType.reduce((acc, row) => { acc[row.registrationType || "unknown"] = row.count; return acc; }, {}),
+          byType: byType.reduce((acc, row) => { acc[row.registrationtype || "unknown"] = row.count; return acc; }, {}),
           totalRevenue: revenue.total || 0,
         });
       } catch (err) { res.status(500).json({ error: err.message }); }
@@ -637,10 +779,10 @@ async function startServer() {
     app.patch("/admin/undo-checkin/:participantId", adminLimiter, requireAuth(["admin"]), async (req, res) => {
       const safeId = path.basename(req.params.participantId);
       try {
-        const participant = await dbGet(`SELECT id, fullName FROM participants WHERE id = $1`, [safeId]);
+        const participant = await dbGet(`SELECT id, fullname FROM participants WHERE id = $1`, [safeId]);
         if (!participant) return res.status(404).json({ error: "Participant not found" });
-        await dbRun(`UPDATE participants SET checkedIn = $1, checkedInAt = NULL, checkedInBy = NULL WHERE id = $2`, [false, safeId]);
-        res.json({ success: true, message: `Check-in reversed for ${participant.fullName}` });
+        await dbRun(`UPDATE participants SET checkedin = $1, checkedinat = NULL, checkedinby = NULL WHERE id = $2`, [false, safeId]);
+        res.json({ success: true, message: `Check-in reversed for ${participant.fullname}` });
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
