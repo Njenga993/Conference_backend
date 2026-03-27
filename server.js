@@ -169,33 +169,87 @@ async function startServer() {
     ========================================
     PAYMENT PROCESSING HELPER
     ========================================
-    Email is sent asynchronously to prevent timeouts
+    WITH DETAILED DEBUG LOGGING
     ========================================
     */
     async function processSuccessfulPayment(participantId, reference) {
+      console.log(`\n${"=".repeat(70)}`);
       console.log(`Processing payment for participant: ${participantId}`);
+      console.log(`${"=".repeat(70)}`);
       
-      const participant = await dbGet(`SELECT * FROM participants WHERE id = $1`, [participantId]);
+      // Step 1: Get the participant
+      console.log(`[STEP 1] Fetching participant from database...`);
+      const participant = await dbGet(`SELECT id, fullName, email, paymentStatus, paymentReference FROM participants WHERE id = $1`, [participantId]);
+      
       if (!participant) {
+        console.error(`❌ [ERROR] Participant not found in database: ${participantId}`);
         throw new Error(`Participant not found in database: ${participantId}`);
       }
       
-      await dbRun(
-        `UPDATE participants SET paymentStatus = $1, paymentReference = $2 WHERE id = $3`,
-        ["paid", reference, participantId]
-      );
+      console.log(`✅ Participant found:`);
+      console.log(`   - Name: ${participant.fullName}`);
+      console.log(`   - Email: ${participant.email}`);
+      console.log(`   - Current paymentStatus: "${participant.paymentStatus}"`);
+      console.log(`   - Current paymentReference: "${participant.paymentReference}"`);
       
+      // Step 2: Update payment status
+      console.log(`\n[STEP 2] Updating payment status in database...`);
+      console.log(`   SQL: UPDATE participants SET paymentStatus = 'paid', paymentReference = '${reference}' WHERE id = '${participantId}'`);
+      
+      try {
+        await dbRun(
+          `UPDATE participants SET paymentStatus = $1, paymentReference = $2 WHERE id = $3`,
+          ["paid", reference, participantId]
+        );
+        console.log(`✅ UPDATE query executed successfully`);
+      } catch (updateErr) {
+        console.error(`❌ [CRITICAL ERROR] UPDATE FAILED for ${participantId}`);
+        console.error(`   Error message: ${updateErr.message}`);
+        console.error(`   Error code: ${updateErr.code}`);
+        throw updateErr;
+      }
+      
+      // Step 3: Verify the update was successful
+      console.log(`\n[STEP 3] Verifying update was successful...`);
+      console.log(`   SQL: SELECT paymentStatus, paymentReference FROM participants WHERE id = '${participantId}'`);
+      
+      const updated = await dbGet(`SELECT paymentStatus, paymentReference FROM participants WHERE id = $1`, [participantId]);
+      
+      if (!updated) {
+        console.error(`❌ [CRITICAL ERROR] Participant disappeared after UPDATE!`);
+        throw new Error(`Participant not found after UPDATE`);
+      }
+      
+      console.log(`✅ Database verification complete:`);
+      console.log(`   - paymentStatus is now: "${updated.paymentStatus}"`);
+      console.log(`   - paymentReference is now: "${updated.paymentReference}"`);
+      
+      if (updated.paymentStatus !== "paid") {
+        console.error(`\n❌ [CRITICAL ERROR] Payment status is still "${updated.paymentStatus}" after UPDATE!`);
+        console.error(`   This means the UPDATE query did not change the value`);
+        console.error(`   Check: database constraints, row permissions, data type issues`);
+      } else {
+        console.log(`✅ [SUCCESS] Payment status correctly updated to "paid"`);
+      }
+      
+      // Step 4: Generate ticket
+      console.log(`\n[STEP 4] Generating conference ticket...`);
       const ticketPath = await generateTicket(participant);
-      console.log("🎫 Ticket generated:", ticketPath);
+      console.log(`🎫 Ticket generated at: ${ticketPath}`);
       
-      // Send email asynchronously (don't block payment confirmation)
+      // Step 5: Send email asynchronously (don't block payment confirmation)
+      console.log(`\n[STEP 5] Sending confirmation email (async, non-blocking)...`);
       sendTicketEmail(participant, ticketPath)
-        .then(() => console.log("📧 Email sent successfully to:", participant.email))
+        .then(() => {
+          console.log(`📧 Email sent successfully to: ${participant.email}`);
+        })
         .catch((err) => {
-          console.error("⚠️ Email send failed (async, non-blocking):", err.message);
-          console.error("   Participant:", participant.email, "| ID:", participantId);
+          console.error(`⚠️ Email send failed (async, non-blocking): ${err.message}`);
+          console.error(`   Participant: ${participant.email} | ID: ${participantId}`);
+          console.error(`   Note: Payment was confirmed, but email failed. User can resend later.`);
         });
       
+      console.log(`${"=".repeat(70)}\n`);
       return participant;
     }
 
