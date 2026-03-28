@@ -315,14 +315,14 @@ function getHtmlContent(participant, eventDates) {
         ${(participant.excursion || participant.galaDinner) ? `
         <div class="addons">
           <div style="font-size: 12px; color: #666; margin-bottom: 8px;">Included Add-ons:</div>
-          ${participant.excursion ? '<span class="addon-tag">🌱 Field Excursion</span>' : ''}
-          ${participant.galaDinner ? '<span class="addon-tag">🍽️ Gala Dinner</span>' : ''}
+          ${participant.excursion ? '<span class="addon-tag"> Field Excursion</span>' : ''}
+          ${participant.galaDinner ? '<span class="addon-tag"> Gala Dinner</span>' : ''}
         </div>
         ` : ''}
       </div>
       
       <div class="info-box">
-        <h3>✨ Important Information</h3>
+        <h3> Important Information</h3>
         <ul class="info-list">
           <li>Please bring a printed or digital copy of your ticket to the event</li>
           <li>The QR code on your ticket will be scanned at check-in</li>
@@ -332,11 +332,7 @@ function getHtmlContent(participant, eventDates) {
         </ul>
       </div>
       
-      <div style="text-align: center;">
-        <a href="${ticketUrl}" class="button">
-          View Ticket Online
-        </a>
-      </div>
+      
       
       <p style="margin: 16px 0 0; font-size: 13px; color: #666; font-style: italic;">
         If you have any questions about your registration, please reply to this email and our support team will assist you promptly.
@@ -432,7 +428,7 @@ async function sendWithSendGrid(participant, ticketPath) {
       email: FROM_EMAIL,
       name: FROM_NAME
     },
-    subject: "🎟️ Your Conference Ticket - EA Indigenous Seed Conference 2026",
+    subject: " Your Conference Ticket - 1st EA Indigenous Seed Conference 2026",
     text: getPlainTextContent(participant, eventDates),
     html: getHtmlContent(participant, eventDates),
     attachments: [
@@ -488,7 +484,7 @@ async function sendWithSMTP(participant, ticketPath) {
     from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
     to: participant.email,
     bcc: process.env.SMTP_BCC || null,
-    subject: "🎟️ Your Conference Ticket - EA Indigenous Seed Conference 2026",
+    subject: " Your Conference Ticket -1st EA Indigenous Seed Conference 2026",
     text: getPlainTextContent(participant, getEventDates()),
     html: getHtmlContent(participant, getEventDates()),
     attachments: [
