@@ -1,3 +1,4 @@
+// server.js - Complete with Multi-Currency Support
 // Switched to ES Modules for modern import/export syntax
 import express from "express";
 import axios from "axios";
@@ -20,6 +21,32 @@ import sendTicketEmail from "./utils/sendTicketEmail.js";
 
 // Load environment variables from .env file
 dotenv.config();
+
+/*
+========================================
+EXCHANGE RATE HELPER
+Fetches live USD to KES rate, with fallback
+========================================
+*/
+const getUSDToKESRate = async () => {
+  try {
+    // Try frankfurter.app (free, no key required)
+    const response = await axios.get('https://api.frankfurter.app/latest?from=USD&to=KES', {
+      timeout: 5000
+    });
+    const rate = response.data.rates?.KES;
+    if (rate && rate > 0) {
+      console.log(`💱 Live exchange rate: 1 USD = ${rate.toFixed(2)} KES`);
+      return rate;
+    }
+  } catch (err) {
+    console.warn(`⚠️ Frankfurter API failed: ${err.message}`);
+  }
+
+  // Fallback rates (update these periodically)
+  console.log(`💱 Using fallback exchange rate: 1 USD = 130 KES`);
+  return 130;
+};
 
 /*
 ========================================
@@ -337,6 +364,7 @@ async function startServer() {
     /*
     ========================================
     INITIALIZE PAYMENT
+    🌍 NOW WITH MULTI-CURRENCY USD → KES CONVERSION
     ========================================
     */
     app.post("/initialize-payment", paymentInitLimiter, async (req, res) => {
@@ -345,6 +373,8 @@ async function startServer() {
       if (typeof amount !== "number" || amount <= 0) return res.status(400).json({ error: "amount must be a positive number" });
 
       const registrationType = metadata?.registrationType || "";
+      const selectedCurrency = metadata?.currency || "USD";  // Get currency from frontend
+      
       const existing = await dbGet(
         `SELECT id FROM participants WHERE email = $1 AND registrationtype = $2 AND paymentstatus = 'paid'`,
         [email.toLowerCase().trim(), registrationType]
@@ -353,7 +383,19 @@ async function startServer() {
       if (existing) return res.status(409).json({ error: "A paid registration already exists for this email and registration type.", code: "DUPLICATE_REGISTRATION" });
 
       const participantId = uuidv4();
+      
       try {
+        // 💱 MULTI-CURRENCY: Convert USD to KES dynamically
+        let amountInKES = amount;
+        if (selectedCurrency !== "KES") {
+          const exchangeRate = await getUSDToKESRate();
+          amountInKES = amount * exchangeRate;
+          console.log(`💱 Currency conversion: ${amount} USD × ${exchangeRate} = ${amountInKES.toFixed(2)} KES`);
+        }
+
+        // Round to nearest KES
+        const amountInKesCents = Math.round(amountInKES * 100);
+
         // INSERT ALL FIELDS FROM REGISTRATION FORM (all lowercase column names)
         await dbRun(
           `INSERT INTO participants (
@@ -376,7 +418,7 @@ async function startServer() {
             registrationType,
             metadata?.excursion ? true : false,
             metadata?.galaDinner ? true : false,
-            amount,
+            Math.round(amountInKES),  // Store in KES in database
             "pending",
             new Date().toISOString(),
             metadata?.hearAbout || "",
@@ -390,13 +432,20 @@ async function startServer() {
         console.log(`   Name: ${name}`);
         console.log(`   Email: ${email}`);
         console.log(`   Type: ${registrationType}`);
+        console.log(`   Amount: ${amountInKES.toFixed(2)} KES (from ${amount} ${selectedCurrency})`);
 
+        // Send to Paystack in KES
         const response = await axios.post(
           "https://api.paystack.co/transaction/initialize",
           { 
             email, 
-            amount: amount * 100,
-            metadata: { participantId },
+            amount: amountInKesCents,  // Paystack expects amount in kobo (cents)
+            metadata: { 
+              participantId,
+              originalAmount: amount,     // Store original USD amount
+              originalCurrency: selectedCurrency,  // Store original currency
+              exchangeRate: amountInKES / amount   // Store rate used
+            },
             callback_url: `${FRONTEND_URL}/payment-success` 
           },
           { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" } }
@@ -793,6 +842,7 @@ async function startServer() {
     */
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌍 Multi-currency support enabled (USD → KES conversion)`);
     });
 
   } catch (error) {
