@@ -229,8 +229,9 @@ async function generateTicket(participant) {
     .stroke();
 
   // --- QR CODE ---
+  const frontendUrl = process.env.FRONTEND_URL;
   const shortId = participant.id.replace(/-/g, "").slice(0, 8).toUpperCase();
-  const qrPayload = `${process.env.FRONTEND_URL}/verify-ticket/${participant.id}`;
+  const qrPayload = `${frontendUrl}/checkin?id=${participant.id}`;
 
   try {
     const qrDataUrl = await QRCode.toDataURL(qrPayload, {
