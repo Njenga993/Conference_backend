@@ -1,51 +1,63 @@
-// utils/sendTicketEmail.js
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import sgMail from '@sendgrid/mail';
+// utils/sendTicketEmail.js - Fixed getShortId function
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import sgMail from "@sendgrid/mail";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize SendGrid
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const FROM_EMAIL = process.env.EMAIL_USER || 'registration@eaindigenousseedconference.org';
-const FROM_NAME = process.env.FROM_NAME || 'EA Indigenous Seed Conference 2026';
+const FROM_EMAIL =
+  process.env.EMAIL_USER || "registration@eaindigenousseedconference.org";
+const FROM_NAME = process.env.FROM_NAME || "EA Indigenous Seed Conference 2026";
 
 let sendgridEnabled = false;
 
-if (SENDGRID_API_KEY && SENDGRID_API_KEY !== 'your_sendgrid_api_key_here' && SENDGRID_API_KEY.startsWith('SG.')) {
+if (
+  SENDGRID_API_KEY &&
+  SENDGRID_API_KEY !== "your_sendgrid_api_key_here" &&
+  SENDGRID_API_KEY.startsWith("SG.")
+) {
   sgMail.setApiKey(SENDGRID_API_KEY);
-  
-  // Optional: Set EU data residency if needed
-  if (process.env.SENDGRID_EU_RESIDENCY === 'true') {
-    sgMail.setSubstitutionWrappers('{{', '}}');
-    console.log('🌍 SendGrid configured for EU data residency');
+
+  if (process.env.SENDGRID_EU_RESIDENCY === "true") {
+    sgMail.setSubstitutionWrappers("{{", "}}");
+    console.log("🌍 SendGrid configured for EU data residency");
   }
-  
+
   sendgridEnabled = true;
-  console.log('✅ SendGrid initialized successfully');
+  console.log("✅ SendGrid initialized successfully");
 } else {
-  console.warn('⚠️ SendGrid API key not configured or invalid');
-  console.warn('   Email sending will use SMTP fallback');
+  console.warn("⚠️ SendGrid API key not configured or invalid");
+  console.warn("   Email sending will use SMTP fallback");
 }
 
 /**
- * Generate a short reference ID
+ * Generate a short reference ID - FIXED to always work
+ * Uses paymentReference if available, otherwise falls back to ID
  */
 function getShortId(participant) {
-  if (participant.paymentReference) {
+  // Try paymentReference first
+  if (participant.paymentReference && participant.paymentReference !== "null") {
     return participant.paymentReference.slice(0, 8).toUpperCase();
   }
-  return participant.id.replace(/-/g, "").slice(0, 8).toUpperCase();
+  // Fallback to ID
+  if (participant.id) {
+    return participant.id.replace(/-/g, "").slice(0, 8).toUpperCase();
+  }
+  // Ultimate fallback
+  return "CONF2026";
 }
 
 /**
  * Format phone number for display
  */
 function formatPhone(participant) {
-  if (!participant.phone) return 'Not provided';
-  const dialCode = participant.dialcode || participant.dialCode || '';
+  if (!participant.phone) return "Not provided";
+  const dialCode = participant.dialCode || participant.dialcode || "";
   return `${dialCode} ${participant.phone}`.trim();
 }
 
@@ -53,18 +65,22 @@ function formatPhone(participant) {
  * Get formatted event dates
  */
 function getEventDates() {
-  const startDate = new Date(process.env.EVENT_START_DATE || '2026-11-17');
-  const endDate = new Date(process.env.EVENT_END_DATE || '2026-11-20');
-  
+  const startDate = new Date(process.env.EVENT_START_DATE || "2026-11-17");
+  const endDate = new Date(process.env.EVENT_END_DATE || "2026-11-20");
+
   const formatDate = (date) => {
-    return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    return date.toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    });
   };
-  
+
   return {
     start: formatDate(startDate),
     end: formatDate(endDate),
     range: `${formatDate(startDate)} – ${formatDate(endDate)}`,
-    venue: process.env.EVENT_VENUE || 'To Be Confirmed, Nairobi, Kenya'
+    venue: process.env.EVENT_VENUE || "To Be Confirmed, Nairobi, Kenya",
   };
 }
 
@@ -77,7 +93,7 @@ function getHtmlContent(participant, eventDates) {
   const regType = participant.registrationType || "delegate";
   const formattedPhone = formatPhone(participant);
   const ticketUrl = `${process.env.FRONTEND_URL}/ticket/${participant.id}`;
-  
+
   return `
 <!DOCTYPE html>
 <html>
@@ -250,7 +266,7 @@ function getHtmlContent(participant, eventDates) {
 <body>
   <div class="container">
     <div class="header">
-      <h1>EA Indigenous Seed<br>Conference 2026</h1>
+      <h1>1st EA Indigenous Seed<br>Conference 2026</h1>
       <p>Preserving Heritage • Cultivating Tomorrow</p>
     </div>
     
@@ -272,37 +288,49 @@ function getHtmlContent(participant, eventDates) {
       </div>
       
       <div class="registration-card">
-        <h3>🎟️ Your Registration</h3>
+        <h3> Your Registration</h3>
         <div class="detail-row">
           <div class="detail-label">Name</div>
-          <div class="detail-value">${participant.fullName || ''}</div>
+          <div class="detail-value">${participant.fullName || ""}</div>
         </div>
         <div class="detail-row">
           <div class="detail-label">Email</div>
-          <div class="detail-value">${participant.email || ''}</div>
+          <div class="detail-value">${participant.email || ""}</div>
         </div>
-        ${formattedPhone !== 'Not provided' ? `
+        ${
+          formattedPhone !== "Not provided"
+            ? `
         <div class="detail-row">
           <div class="detail-label">Phone</div>
           <div class="detail-value">${formattedPhone}</div>
         </div>
-        ` : ''}
+        `
+            : ""
+        }
         <div class="detail-row">
           <div class="detail-label">Registration Type</div>
           <div class="detail-value" style="text-transform: capitalize;">${regType}</div>
         </div>
-        ${participant.organization ? `
+        ${
+          participant.organization
+            ? `
         <div class="detail-row">
           <div class="detail-label">Organization</div>
           <div class="detail-value">${participant.organization}</div>
         </div>
-        ` : ''}
-        ${participant.country ? `
+        `
+            : ""
+        }
+        ${
+          participant.country
+            ? `
         <div class="detail-row">
           <div class="detail-label">Country</div>
           <div class="detail-value">${participant.country}</div>
         </div>
-        ` : ''}
+        `
+            : ""
+        }
         <div class="detail-row">
           <div class="detail-label">Reference ID</div>
           <div class="detail-value"><code style="background: #f0f0f0; padding: 2px 6px; border-radius: 4px;">${shortId}</code></div>
@@ -312,17 +340,21 @@ function getHtmlContent(participant, eventDates) {
           <div class="detail-value"><strong>$${participant.amount || 0}</strong></div>
         </div>
         
-        ${(participant.excursion || participant.galaDinner) ? `
+        ${
+          participant.excursion || participant.galaDinner
+            ? `
         <div class="addons">
           <div style="font-size: 12px; color: #666; margin-bottom: 8px;">Included Add-ons:</div>
-          ${participant.excursion ? '<span class="addon-tag"> Field Excursion</span>' : ''}
-          ${participant.galaDinner ? '<span class="addon-tag"> Gala Dinner</span>' : ''}
+          ${participant.excursion ? '<span class="addon-tag"> Field Excursion</span>' : ""}
+          ${participant.galaDinner ? '<span class="addon-tag"> Gala Dinner</span>' : ""}
         </div>
-        ` : ''}
+        `
+            : ""
+        }
       </div>
       
       <div class="info-box">
-        <h3> Important Information</h3>
+        <h3>✨ Important Information</h3>
         <ul class="info-list">
           <li>Please bring a printed or digital copy of your ticket to the event</li>
           <li>The QR code on your ticket will be scanned at check-in</li>
@@ -331,8 +363,6 @@ function getHtmlContent(participant, eventDates) {
           <li>Wi-Fi access details will be available at the registration desk</li>
         </ul>
       </div>
-      
-      
       
       <p style="margin: 16px 0 0; font-size: 13px; color: #666; font-style: italic;">
         If you have any questions about your registration, please reply to this email and our support team will assist you promptly.
@@ -346,7 +376,7 @@ function getHtmlContent(participant, eventDates) {
         <a href="${process.env.FRONTEND_URL}/contact">Contact us</a>
       </p>
       <p style="margin-top: 12px; font-size: 11px;">
-        This is an automated message. Please do not reply directly to this email.
+        This is an automated message. Please do not reply directly to this email. For assistance, contact us through our website.
       </p>
     </div>
   </div>
@@ -364,7 +394,7 @@ function getPlainTextContent(participant, eventDates) {
   const regType = participant.registrationType || "delegate";
   const formattedPhone = formatPhone(participant);
   const ticketUrl = `${process.env.FRONTEND_URL}/ticket/${participant.id}`;
-  
+
   return [
     `Dear ${firstName},`,
     "",
@@ -404,7 +434,9 @@ function getPlainTextContent(participant, eventDates) {
     "The Organising Team",
     "EA Indigenous Seed Conference 2026",
     "www.eaindigenousseedconference.org",
-  ].filter(line => line !== "").join("\n");
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
 /**
@@ -412,21 +444,21 @@ function getPlainTextContent(participant, eventDates) {
  */
 async function sendWithSendGrid(participant, ticketPath) {
   if (!sendgridEnabled) {
-    throw new Error('SendGrid not configured');
+    throw new Error("SendGrid not configured");
   }
-  
+
   const eventDates = getEventDates();
-  
+
   // Read ticket file as base64
   const ticketAttachment = fs.readFileSync(ticketPath);
-  const ticketBase64 = ticketAttachment.toString('base64');
+  const ticketBase64 = ticketAttachment.toString("base64");
   const shortId = getShortId(participant);
-  
+
   const msg = {
     to: participant.email,
     from: {
       email: FROM_EMAIL,
-      name: FROM_NAME
+      name: FROM_NAME,
     },
     subject: " Your Conference Ticket - 1st EA Indigenous Seed Conference 2026",
     text: getPlainTextContent(participant, eventDates),
@@ -434,27 +466,26 @@ async function sendWithSendGrid(participant, ticketPath) {
     attachments: [
       {
         content: ticketBase64,
-        filename: `EA-Seed-Conference-Ticket-${shortId}.pdf`,
+        filename: `1st-EA-Seed-Conference-Ticket-${shortId}.pdf`,
         type: "application/pdf",
-        disposition: "attachment"
-      }
+        disposition: "attachment",
+      },
     ],
-    // Optional: Track opens and clicks
     tracking_settings: {
       click_tracking: { enable: true },
-      open_tracking: { enable: true }
-    }
+      open_tracking: { enable: true },
+    },
   };
-  
+
   // Add BCC if configured
   if (process.env.SMTP_BCC) {
     msg.bcc = process.env.SMTP_BCC;
   }
-  
+
   console.log(`📧 Sending via SendGrid to ${participant.email}...`);
   const response = await sgMail.send(msg);
   console.log(`✅ Email sent via SendGrid to ${participant.email}`);
-  return { success: true, method: 'sendgrid', response };
+  return { success: true, method: "sendgrid", response };
 }
 
 /**
@@ -462,8 +493,8 @@ async function sendWithSendGrid(participant, ticketPath) {
  */
 async function sendWithSMTP(participant, ticketPath) {
   console.log(`🔄 Falling back to SMTP for ${participant.email}...`);
-  
-  const nodemailer = await import('nodemailer');
+
+  const nodemailer = await import("nodemailer");
   const transporter = nodemailer.default.createTransport({
     host: process.env.EMAIL_HOST,
     port: parseInt(process.env.EMAIL_PORT, 10) || 587,
@@ -477,14 +508,14 @@ async function sendWithSMTP(participant, ticketPath) {
     },
     connectionTimeout: 10000,
   });
-  
+
   const shortId = getShortId(participant);
-  
+
   const mailOptions = {
     from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
     to: participant.email,
     bcc: process.env.SMTP_BCC || null,
-    subject: " Your Conference Ticket -1st EA Indigenous Seed Conference 2026",
+    subject: " Your Conference Ticket - 1st EA Indigenous Seed Conference 2026",
     text: getPlainTextContent(participant, getEventDates()),
     html: getHtmlContent(participant, getEventDates()),
     attachments: [
@@ -495,12 +526,12 @@ async function sendWithSMTP(participant, ticketPath) {
       },
     ],
   };
-  
+
   if (!mailOptions.bcc) delete mailOptions.bcc;
-  
+
   const info = await transporter.sendMail(mailOptions);
   console.log(`✅ Email sent via SMTP to ${participant.email}`);
-  return { success: true, method: 'smtp', messageId: info.messageId };
+  return { success: true, method: "smtp", messageId: info.messageId };
 }
 
 /**
@@ -509,46 +540,54 @@ async function sendWithSMTP(participant, ticketPath) {
 async function sendTicketEmail(participant, ticketPath) {
   // Validate inputs
   if (!participant || !participant.email) {
-    console.error('❌ Cannot send email: Missing participant email');
-    throw new Error('Missing participant email');
+    console.error("❌ Cannot send email: Missing participant email");
+    throw new Error("Missing participant email");
   }
-  
+
   if (!ticketPath || !fs.existsSync(ticketPath)) {
     console.error(`❌ Ticket file not found: ${ticketPath}`);
     throw new Error(`Ticket file not found at path: ${ticketPath}`);
   }
-  
+
   console.log(`📧 Attempting to send email to ${participant.email}...`);
-  
+
   // Try SendGrid first if enabled
   if (sendgridEnabled) {
     try {
       const result = await sendWithSendGrid(participant, ticketPath);
       return result;
     } catch (sendgridError) {
-      console.error(`⚠️ SendGrid failed for ${participant.email}:`, sendgridError.message);
+      console.error(
+        `⚠️ SendGrid failed for ${participant.email}:`,
+        sendgridError.message,
+      );
       if (sendgridError.response) {
-        console.error('SendGrid error details:', JSON.stringify(sendgridError.response.body, null, 2));
+        console.error(
+          "SendGrid error details:",
+          JSON.stringify(sendgridError.response.body, null, 2),
+        );
       }
-      
+
       // Check if SMTP fallback is configured
       if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
-        console.log('🔄 Attempting SMTP fallback...');
+        console.log("🔄 Attempting SMTP fallback...");
         try {
           const smtpResult = await sendWithSMTP(participant, ticketPath);
           return smtpResult;
         } catch (smtpError) {
           console.error(`❌ SMTP fallback also failed:`, smtpError.message);
-          throw new Error(`Both SendGrid and SMTP failed: ${smtpError.message}`);
+          throw new Error(
+            `Both SendGrid and SMTP failed: ${smtpError.message}`,
+          );
         }
       } else {
         throw new Error(`SendGrid failed: ${sendgridError.message}`);
       }
     }
-  } 
+  }
   // SendGrid not configured, try SMTP only
   else if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
-    console.log('📧 SendGrid not configured, using SMTP...');
+    console.log("📧 SendGrid not configured, using SMTP...");
     try {
       const result = await sendWithSMTP(participant, ticketPath);
       return result;
@@ -556,16 +595,20 @@ async function sendTicketEmail(participant, ticketPath) {
       console.error(`❌ SMTP failed:`, smtpError.message);
       throw new Error(`SMTP email failed: ${smtpError.message}`);
     }
-  } 
+  }
   // No email configuration
   else {
-    console.warn(`⚠️ No email configuration found. Would have sent email to ${participant.email}`);
-    console.warn('   Please configure SENDGRID_API_KEY or EMAIL_HOST/EMAIL_USER');
-    return { 
-      success: false, 
-      disabled: true, 
-      message: 'Email service not configured',
-      participant: participant.email 
+    console.warn(
+      `⚠️ No email configuration found. Would have sent email to ${participant.email}`,
+    );
+    console.warn(
+      "   Please configure SENDGRID_API_KEY or EMAIL_HOST/EMAIL_USER",
+    );
+    return {
+      success: false,
+      disabled: true,
+      message: "Email service not configured",
+      participant: participant.email,
     };
   }
 }
